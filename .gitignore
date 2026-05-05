@@ -1,0 +1,49 @@
+# Outputs / artifacts
+results/
+runs/
+logs/
+wandb/
+*.ckpt
+*.pth
+*.pt
+*.onnx
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+dist/
+*.egg-info/
+*.egg
+
+# Virtual envs
+.venv/
+venv/
+env/
+.python-version
+
+# Jupyter
+.ipynb_checkpoints/
+
+# IDE / editor
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Local config / secrets
+.env
+.env.local
+
+# Data (mounted from host, never committed)
+data/
+storage/
+storage1/
+datasets/

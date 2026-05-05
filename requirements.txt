@@ -1,0 +1,28 @@
+# KISS-IMU runtime requirements.
+# These are already preinstalled in the official Docker image
+# (jivvon1/ros-noetic-cuda:v3). List them here for reference and
+# for users who want to run outside the container.
+
+# core
+numpy
+pandas
+scipy
+scikit-learn
+matplotlib
+tqdm
+pyyaml
+
+# DL
+torch>=1.13
+torchvision
+pypose>=0.6
+tensorboard
+
+# point clouds / LiDAR odometry
+open3d
+small_gicp
+pygicp
+kiss-icp
+
+# misc
+opencv-python

@@ -1,0 +1,29 @@
+services:
+  kiss-imu:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    image: jivvon1/ros-noetic-cuda:v3
+    container_name: kiss-imu-ws
+    privileged: true
+    ipc: host
+    shm_size: "2gb"
+    runtime: nvidia
+    stdin_open: true
+    tty: true
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=all
+      - DISPLAY=${DISPLAY}
+      - QT_X11_NO_MITSHM=1
+      - XAUTHORITY=/tmp/.docker.xauth
+    working_dir: /home/test_ws/src
+    volumes:
+      - ..:/home/test_ws/src
+      - /storage1:/storage1  # ← replace {dataset_folder} with your dataset path
+      - /tmp/.X11-unix:/tmp/.X11-unix:rw
+      - ~/.Xauthority:/tmp/.docker.xauth:ro
+    devices:
+      - /dev/dri:/dev/dri
+      - /dev/video0:/dev/video0
+    command: /bin/bash
