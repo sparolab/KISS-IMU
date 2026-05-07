@@ -11,7 +11,7 @@
 <h3>🏆 [IEEE ICRA 2026 Award Finalist]</h3>
 
   <a href="https://scholar.google.com/citations?user=wL8VdUMAAAAJ&hl=ko" target="_blank">Jiwon Choi</a><sup></sup>,
-  <a href="https://scholar.google.com/citations?user=t5UEbooAAAAJ&hl=ko" target="_blank">Hogyun Kim</a><sup></sup>,
+  <a href="https://hogyun2.github.io/" target="_blank">Hogyun Kim</a><sup></sup>,
   <a href="https://scholar.google.com/citations?user=kiBTkqMAAAAJ&hl=ko" target="_blank">Geonmo Yang</a><sup></sup>,
   <a href="https://scholar.google.com/citations?user=4-5Fi9kAAAAJ&hl=ko" target="_blank">Juhui Lee</a><sup></sup>,
   <a href="https://scholar.google.com/citations?user=W5MOKWIAAAAJ&hl=ko" target="_blank">Younggun Cho</a><sup>†</sup>
