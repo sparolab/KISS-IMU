@@ -159,5 +159,5 @@ For academic usage, the code is released under the BSD 3.0 license. For any comm
 
 ## ✨ Contributors
 <a href="https://github.com/sparolab/KISS-IMU/graphs/contributors">
-  <img src="https://contrib.rocks/image?repo=sparolab/KISS-IMU" />
+  <img src="https://contrib.rocks/image?repo=sparolab/KISS-IMU&t=1" />
 </a>
