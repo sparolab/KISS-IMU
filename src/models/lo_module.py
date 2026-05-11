@@ -227,13 +227,11 @@ class LOModule(nn.Module):
         self.scans0_np = None
         self.scans1_np = None
 
-        # submap 옵션
         self.use_submap = bool(use_submap)
         self.submap_voxel = float(submap_voxel)
         self.submap_max_points = int(submap_max_points)
-        self.submap_pts = None  # 항상 "현재(curr) 프레임" 좌표계로 유지 (A,E)
+        self.submap_pts = None
 
-        # 모델
         if lo_model == 'g_icp':
             self.model = G_ICP()
         elif lo_model == 'fast_gicp':
@@ -254,11 +252,9 @@ class LOModule(nn.Module):
         scans1 = sample['scan1']
         B = len(scans0)
 
-        # D: 시퀀스 경계에서 리셋
         if last_state is None or sample.get('is_new_seq', False) or sample.get('reset_submap', False):
             self.reset_submap()
 
-        # 초기 글로벌
         if last_state is not None:
             if isinstance(last_state, pp.LieTensor):
                 curr_glb_mat = last_state.matrix().cpu().numpy().astype(np.float64)
@@ -269,7 +265,6 @@ class LOModule(nn.Module):
         else:
             curr_glb_mat = np.eye(4, dtype=np.float64)
 
-        # ① small_gicp + use_submap: 순차 처리 (A,B,C,E)
         if isinstance(self.model, Small_GICP) and self.use_submap:
             motions_mat = [None] * B
             overlap_scores = np.zeros(B, dtype=np.float32)
@@ -277,7 +272,7 @@ class LOModule(nn.Module):
             self.scans0_np, self.scans1_np = [], []
 
             building_submap_this_batch = (self.submap_pts is None)
-            submap_local = None  # 배치 내 누적(최초 생성용)
+            submap_local = None
 
             for idx in range(B):
                 curr = scans1[idx].cpu().numpy()
@@ -287,65 +282,53 @@ class LOModule(nn.Module):
                 curr_trans = self.transformScan(curr)
                 prev_trans = self.transformScan(prev)
 
-                # target: 서브맵 있으면 서브맵, 없으면 prev
                 if (not building_submap_this_batch) and (self.submap_pts is not None) and self.submap_pts.size > 0:
                     target_pts = self.submap_pts
                 else:
                     target_pts = prev_trans
 
-                # 정합 (float64 유지, E)
                 T_ICP_Relative = self.model.get_motion(
                     source_raw=curr_trans.astype(np.float64),
                     target_raw=target_pts.astype(np.float64)
                 ).astype(np.float64)
 
-                # 글로벌 누적 (float64, E)
                 T_ICP_Global = curr_glb_mat @ T_ICP_Relative
                 motions_mat[idx] = T_ICP_Relative
                 rel_mats.append(T_ICP_Relative.copy())
                 global_mats.append(T_ICP_Global.copy())
                 curr_glb_mat = T_ICP_Global
 
-                # B: overlap 기준을 타깃에 맞춤
                 curr_in_target = _apply_T_left(curr_trans, T_ICP_Relative)
                 overlap = calc_symmetric_overlap(target_pts, curr_in_target)
                 overlap_scores[idx] = overlap
 
-                # 시각화용 저장(다운샘플만)
                 self.scans1_np.append(curr_trans[::2])
                 self.scans0_np.append(target_pts[::2] if target_pts is self.submap_pts else prev_trans[::2])
 
-                # --- 서브맵 갱신 (A,C,E): "신규 프레임만 voxel", FIFO, 랜덤 없음 ---
                 T_rel_inv = np.linalg.inv(T_ICP_Relative)
 
                 if building_submap_this_batch:
-                    # 배치 종료 후 세팅을 위해 로컬 누적
                     prev_in_curr = _apply_T_left(prev_trans, T_rel_inv)
                     curr_ds = _voxel_downsample_np(curr_trans, self.submap_voxel)  # curr만 voxel
                     if submap_local is None:
                         submap_local = np.vstack([prev_in_curr, curr_ds])
                     else:
                         submap_local = np.vstack([_apply_T_left(submap_local, T_rel_inv), curr_ds])
-                    # 용량 제한(FIFO)
                     if submap_local.shape[0] > self.submap_max_points:
                         submap_local = submap_local[-self.submap_max_points:]
                 else:
-                    # 이미 서브맵 존재: 이전 서브맵을 curr로 이동 후 curr_ds만 붙임
                     moved = _apply_T_left(self.submap_pts, T_rel_inv) if self.submap_pts is not None else np.empty((0, 3), dtype=curr_trans.dtype)
                     curr_ds = _voxel_downsample_np(curr_trans, self.submap_voxel)
                     merged = np.vstack([moved, curr_ds])
-                    # FIFO 제한
                     if merged.shape[0] > self.submap_max_points:
                         merged = merged[-self.submap_max_points:]
-                    self.submap_pts = merged  # 재-voxel 금지(그리드 흔들림 방지)
+                    self.submap_pts = merged
 
-            # 배치 끝: 최초 서브맵 생성/설정 (C)
             if building_submap_this_batch and (submap_local is not None):
                 if submap_local.shape[0] > self.submap_max_points:
                     submap_local = submap_local[-self.submap_max_points:]
                 self.submap_pts = submap_local
 
-        # ② 그 외: 기존 병렬 / KISS 경로
         else:
             if not isinstance(self.model, KISS_ICP):
                 args_list = [
@@ -373,7 +356,6 @@ class LOModule(nn.Module):
                     self.scans1_np.append(curr_down)
                     self.scans0_np.append(prev_down)
             else:
-                # KISS_ICP 경로(원형 유지, E만 캐스팅)
                 self.scans0_np = []
                 self.scans1_np = []
                 motions_mat = [None] * B
@@ -381,7 +363,6 @@ class LOModule(nn.Module):
                 rel_mats = []
                 global_mats = [curr_glb_mat.copy()]
 
-                # last_state 반영
                 if last_state is not None:
                     if isinstance(last_state, pp.LieTensor):
                         curr_glb_mat = last_state.matrix().cpu().numpy().astype(np.float64)
@@ -414,7 +395,6 @@ class LOModule(nn.Module):
                     self.scans0_np.append(prev_down)
                     self.scans1_np.append(curr_down)
 
-        # 공통 반환 (torch로 변환 시에만 float32)
         def mat_to_vec7(mat44):
             t = mat44[:3, 3]
             Rm = mat44[:3, :3]

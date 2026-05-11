@@ -4,6 +4,11 @@
 # Edit the variables below or override them via environment, e.g.:
 #   DATA_TYPE=kitti DATA_DIR=/storage/KITTI bash scripts/train.sh
 #
+# Set USE_GT=true to train against GT poses instead of the ICP/PGO pseudo-
+# label. ICP and PGO are then skipped entirely, so iterations are much
+# faster — useful for isolating the contribution of GMM reweighting from
+# the LO pseudo-label.
+#
 # Run from the repo root.
 set -euo pipefail
 
@@ -29,21 +34,37 @@ TRAIN_RATIO=${TRAIN_RATIO:-1.0}
 GMM_COMP_NUM=${GMM_COMP_NUM:-0}                    # 0 = auto-pick K via BIC
 USE_VALIDATION=${USE_VALIDATION:-true}
 USE_SUBMAP=${USE_SUBMAP:-false}
+USE_GT=${USE_GT:-false}                            # true = GT supervision (no ICP/PGO)
 
 # ---- output layout ---------------------------------------------------------
-REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-TRAIN_NAME="bs=${BATCH_SIZE}_lr=${LR}_rw=${ROT_W}_vw=${VEL_W}_tw=${POS_W}_crw=${COV_R_W}_cvw=${COV_V_W}_ctw=${COV_T_W}_rcs=${ROT_COV_S}_vcs=${VEL_COV_S}_pcs=${POS_COV_S}_K=${GMM_COMP_NUM}"
+REPO_ROOT=$(cd "$(dirname "$0")/.." && pwd)         # absolute path to repo root
+RESULT_BASE=${RESULT_BASE:-${REPO_ROOT}/results}    # absolute by default so the
+                                                    # output stays at repo root
+                                                    # regardless of cwd later
+if [[ "$USE_GT" == "true" ]]; then
+    TRAIN_NAME="GT+GMM_bs=${BATCH_SIZE}_lr=${LR}_rw=${ROT_W}_vw=${VEL_W}_tw=${POS_W}_crw=${COV_R_W}_cvw=${COV_V_W}_ctw=${COV_T_W}_rcs=${ROT_COV_S}_vcs=${VEL_COV_S}_pcs=${POS_COV_S}_K=${GMM_COMP_NUM}"
+else
+    TRAIN_NAME="bs=${BATCH_SIZE}_lr=${LR}_rw=${ROT_W}_vw=${VEL_W}_tw=${POS_W}_crw=${COV_R_W}_cvw=${COV_V_W}_ctw=${COV_T_W}_rcs=${ROT_COV_S}_vcs=${VEL_COV_S}_pcs=${POS_COV_S}_K=${GMM_COMP_NUM}"
+fi
 
 train_seqs_arr=( $TRAIN_SEQS ); valid_seqs_arr=( $VALID_SEQS )
 train_seqs_str=$(IFS='_' ; echo "${train_seqs_arr[*]}")
 valid_seqs_str=$(IFS='_' ; echo "${valid_seqs_arr[*]}")
 
-RESULT_DIR="${REPO_ROOT}/results/${DATA_TYPE}/${LM_WEIGHT}/${TRAIN_NAME}/${LO_MODEL}/${train_seqs_str}_valid_${valid_seqs_str}/${TRAIN_RATIO}"
+if [[ "$USE_GT" == "true" ]]; then
+    # GT supervision skips LO entirely, so leaving LO_MODEL out of the path
+    # is honest — and the "use_gt" segment keeps these runs from colliding
+    # with regular pseudo-label runs.
+    RESULT_DIR="${RESULT_BASE}/${DATA_TYPE}/use_gt/${LM_WEIGHT}/${TRAIN_NAME}/${train_seqs_str}_valid_${valid_seqs_str}/${TRAIN_RATIO}"
+else
+    RESULT_DIR="${RESULT_BASE}/${DATA_TYPE}/${LM_WEIGHT}/${TRAIN_NAME}/${LO_MODEL}/${train_seqs_str}_valid_${valid_seqs_str}/${TRAIN_RATIO}"
+fi
 mkdir -p "$RESULT_DIR"
 
 # ---- flag handling ---------------------------------------------------------
 [[ "$USE_VALIDATION" == "true" ]] && VALID_ARG="--valid-seqs ${valid_seqs_arr[@]}" || VALID_ARG="--valid-seqs"
 [[ "$USE_SUBMAP"    == "true" ]] && SUBMAP_ARG="--use-submap" || SUBMAP_ARG="--no-submap"
+[[ "$USE_GT"        == "true" ]] && USE_GT_ARG="--use-gt"     || USE_GT_ARG=""
 
 # ---- run -------------------------------------------------------------------
 cd "$(dirname "$0")/../src"
@@ -68,6 +89,7 @@ python3 train.py \
     --no-adaptive-weight \
     ${SUBMAP_ARG} \
     --train-ratio ${TRAIN_RATIO} \
-    --gmm-comp-num ${GMM_COMP_NUM}
+    --gmm-comp-num ${GMM_COMP_NUM} \
+    ${USE_GT_ARG}
 
 echo "[train.sh] done. result-dir: ${RESULT_DIR}"

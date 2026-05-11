@@ -1,18 +1,13 @@
-"""Evaluate one or more KISS-IMU checkpoints on user-specified sequences.
+"""Evaluate a single KISS-IMU checkpoint on user-specified sequences.
 
-Two modes:
-  (1) --ckpt PATH         : evaluate a single .ckpt
-  (2) --ckpt-dir PATH     : scan dir for *.ckpt and pick the best one
-                            using --select-metric ({ape, rpe_trans, rpe_rot, balanced})
-
-The evaluator slides a fixed window over each sequence and reports
-endpoint RPE (translation, rotation) and last-step APE.
+Slides a fixed-size window over each sequence and reports endpoint RPE
+(translation, rotation) and last-step APE. Training already selects the
+best checkpoint by validation, so this script intentionally evaluates one
+ckpt only — pass the path to `best_model.ckpt` in --ckpt.
 """
 
 import os
 import sys
-import glob
-import ast
 import argparse
 import numpy as np
 import pypose as pp
@@ -38,22 +33,14 @@ def parse_args():
                             'tailrobot', 'kimera', 'botanic_velodyne'])
     p.add_argument('--eval-seqs', nargs='+', type=str, required=True)
 
-    grp = p.add_mutually_exclusive_group(required=True)
-    grp.add_argument('--ckpt',     type=str, help='path to a single .ckpt')
-    grp.add_argument('--ckpt-dir', type=str, help='dir containing *.ckpt files')
+    p.add_argument('--ckpt', type=str, required=True,
+                   help='path to the checkpoint to evaluate (best_model.ckpt)')
 
     p.add_argument('--device',     type=str, default='cuda:0')
     p.add_argument('--num-workers', type=int, default=1)
     p.add_argument('--window-size', type=int, default=200,
                    help='IMU window size used for sliding-window evaluation')
     p.add_argument('--result-dir',  type=str, default='eval_results')
-
-    p.add_argument('--select-metric', type=str, default='ape',
-                   choices=['ape', 'rpe_trans', 'rpe_rot', 'balanced'])
-    p.add_argument('--balance-mode',  type=str, default='euclid',
-                   choices=['euclid', 'minimax', 'weighted'])
-    p.add_argument('--balance-weights', type=str, default='(1.0,1.0,1.0)',
-                   help='(w_trans, w_rot, w_ape)')
 
     p.add_argument('--save-plot', action='store_true',
                    help='save endpoint XY plot for each (ckpt, seq) pair')
@@ -118,8 +105,8 @@ def eval_state(data_loader, integrator, network, device, save_plot_path=None):
         plt.gca().set_aspect('equal', adjustable='box')
         plt.xlabel('x [m]'); plt.ylabel('y [m]')
         plt.legend(); plt.title('Endpoint positions per window (XY)')
-        os.makedirs(os.path.dirname(save_plot_path), exist_ok=True)
-        plt.savefig(save_plot_path, dpi=200)
+        plt.tight_layout()
+        plt.savefig(save_plot_path, dpi=150, bbox_inches='tight')
         plt.close()
 
     return {
@@ -152,100 +139,25 @@ def evaluate_ckpt(ckpt_path, args):
     return per_seq, avg
 
 
-def parse_weights(s):
-    try:
-        t = ast.literal_eval(s)
-        if isinstance(t, (list, tuple)):
-            if len(t) == 3:  return tuple(map(float, t))
-            if len(t) == 2:  return (float(t[0]), float(t[1]), 1.0)
-    except Exception:
-        pass
-    return (1.0, 1.0, 1.0)
-
-
-def compute_norm_stats(all_results):
-    keys = ['rpe_trans', 'rpe_rot', 'ape']
-    mins = {k: min(r['avg'][k] for r in all_results.values()) for k in keys}
-    maxs = {k: max(r['avg'][k] for r in all_results.values()) for k in keys}
-    denoms = {k: (maxs[k] - mins[k] if maxs[k] > mins[k] else 1.0) for k in keys}
-    return mins, denoms
-
-
-def balanced_score(avg, mins, denoms, mode, weights):
-    nt = (avg['rpe_trans'] - mins['rpe_trans']) / denoms['rpe_trans']
-    nr = (avg['rpe_rot']   - mins['rpe_rot'])   / denoms['rpe_rot']
-    na = (avg['ape']       - mins['ape'])       / denoms['ape']
-    wt, wr, wa = weights
-    if mode == 'weighted':
-        return wt * nt + wr * nr + wa * na
-    if mode == 'minimax':
-        return max(wt * nt, wr * nr, wa * na)
-    return (wt * nt) ** 2 + (wr * nr) ** 2 + (wa * na) ** 2
-
-
-def select_score(avg, key, mins=None, denoms=None, mode='euclid', weights=(1, 1, 1)):
-    if key in ('ape', 'rpe_trans', 'rpe_rot'):
-        return avg[key]
-    return balanced_score(avg, mins, denoms, mode, weights)
-
-
 def main():
     args = parse_args()
     os.makedirs(args.result_dir, exist_ok=True)
 
-    if args.ckpt is not None:
-        ckpt_paths = [args.ckpt]
-    else:
-        if not os.path.isdir(args.ckpt_dir):
-            print(f"[ERROR] no such ckpt dir: {args.ckpt_dir}", file=sys.stderr)
-            sys.exit(1)
-        ckpt_paths = sorted(glob.glob(os.path.join(args.ckpt_dir, '*.ckpt')))
-        if len(ckpt_paths) == 0:
-            print(f"[ERROR] no *.ckpt under: {args.ckpt_dir}", file=sys.stderr)
-            sys.exit(1)
+    if not os.path.isfile(args.ckpt):
+        print(f"[ERROR] no such ckpt: {args.ckpt}", file=sys.stderr)
+        sys.exit(1)
 
-    print(f"[INFO] evaluating {len(ckpt_paths)} ckpt(s) on {len(args.eval_seqs)} seq(s)")
-    all_results = {}
-    for p in ckpt_paths:
-        per_seq, avg = evaluate_ckpt(p, args)
-        all_results[os.path.basename(p)] = {'per_seq': per_seq, 'avg': avg}
-        print(f"  - {os.path.basename(p)}  "
-              f"rpe_trans={avg['rpe_trans']:.3f} m  "
-              f"rpe_rot={avg['rpe_rot']:.3f} deg  "
-              f"ape={avg['ape']:.3f} m")
+    print(f"[INFO] evaluating {args.ckpt} on {len(args.eval_seqs)} seq(s)")
+    per_seq, avg = evaluate_ckpt(args.ckpt, args)
 
-    if len(ckpt_paths) > 1:
-        mins, denoms = compute_norm_stats(all_results)
-        weights = parse_weights(args.balance_weights)
-
-        best_name, best_score = None, float('inf')
-        for name, res in all_results.items():
-            s = select_score(res['avg'], args.select_metric,
-                             mins, denoms, args.balance_mode, weights)
-            if s < best_score:
-                best_score, best_name = s, name
-
-        print("\n================ best checkpoint ================")
-        suffix = f' ({args.balance_mode}, weights={weights})' if args.select_metric == 'balanced' else ''
-        print(f"select-metric : {args.select_metric}{suffix}")
-        print(f"best ckpt     : {best_name}")
-        avg = all_results[best_name]['avg']
-        print(f"averaged      : rpe_trans={avg['rpe_trans']:.3f} m | "
-              f"rpe_rot={avg['rpe_rot']:.3f} deg | ape={avg['ape']:.3f} m")
-        print("\n========== per-seq detail (best ckpt) ==========")
-        for seq in args.eval_seqs:
-            m = all_results[best_name]['per_seq'][seq]
-            print(f"  {seq:>20s}  rpe_trans={m['rpe_trans']:.3f} m | "
-                  f"rpe_rot={m['rpe_rot']:.3f} deg | ape={m['ape']:.3f} m | "
-                  f"windows={m['n_windows']}")
-    else:
-        name = list(all_results.keys())[0]
-        print("\n========== per-seq detail ==========")
-        for seq in args.eval_seqs:
-            m = all_results[name]['per_seq'][seq]
-            print(f"  {seq:>20s}  rpe_trans={m['rpe_trans']:.3f} m | "
-                  f"rpe_rot={m['rpe_rot']:.3f} deg | ape={m['ape']:.3f} m | "
-                  f"windows={m['n_windows']}")
+    print(f"\naveraged: rpe_trans={avg['rpe_trans']:.3f} m | "
+          f"rpe_rot={avg['rpe_rot']:.3f} deg | ape={avg['ape']:.3f} m")
+    print("\n========== per-seq detail ==========")
+    for seq in args.eval_seqs:
+        m = per_seq[seq]
+        print(f"  {seq:>20s}  rpe_trans={m['rpe_trans']:.3f} m | "
+              f"rpe_rot={m['rpe_rot']:.3f} deg | ape={m['ape']:.3f} m | "
+              f"windows={m['n_windows']}")
 
 
 if __name__ == '__main__':

@@ -1,81 +1,72 @@
 <div align="center">
   <h1>
-    KISS-IMU: Self-supervised Inertial Odometry <br> 
-    with Motion-balanced Learning and Uncertainty-aware Inference</h1>
+    KISS-IMU: Self-supervised Inertial Odometry <br>
+    with Motion-balanced Learning and Uncertainty-aware Inference
+  </h1>
   <a href="https://github.com/sparolab"><img src="https://img.shields.io/badge/Python-3670A0?logo=python&logoColor=ffdd54" /></a>
   <a href="https://sparolab.github.io/research/kiss_imu/"><img src="https://github.com/sparolab/Joint_ID/blob/main/fig/badges/badge-website.svg" alt="Project" /></a>
   <a href="https://arxiv.org/abs/2603.06205"><img src="https://img.shields.io/badge/arXiv-2603.06205-b31b1b.svg?style=flat-square" alt="arXiv" /></a>
   <a href="https://www.youtube.com/watch?v=cjAFROi-jG0"><img src="https://badges.aleen42.com/src/youtube.svg" alt="YouTube" /></a>
   <br />
 
-<h3>🏆 [IEEE ICRA 2026 Award Finalist]</h3>
+  <h3>🏆 IEEE ICRA 2026 Award Finalist</h3>
 
-  <a href="https://scholar.google.com/citations?user=wL8VdUMAAAAJ&hl=ko" target="_blank">Jiwon Choi</a><sup></sup>,
-  <a href="https://hogyun2.github.io" target="_blank">Hogyun Kim</a><sup></sup>,
-  <a href="https://scholar.google.com/citations?user=kiBTkqMAAAAJ&hl=ko" target="_blank">Geonmo Yang</a><sup></sup>,
-  <a href="https://scholar.google.com/citations?user=4-5Fi9kAAAAJ&hl=ko" target="_blank">Juhui Lee</a><sup></sup>,
+  <a href="https://scholar.google.com/citations?user=wL8VdUMAAAAJ&hl=ko" target="_blank">Jiwon Choi</a>,
+  <a href="https://hogyun2.github.io" target="_blank">Hogyun Kim</a>,
+  <a href="https://scholar.google.com/citations?user=kiBTkqMAAAAJ&hl=ko" target="_blank">Geonmo Yang</a>,
+  <a href="https://scholar.google.com/citations?user=kiBTkqMAAAAJ&hl=ko" target="_blank">Juhui Lee</a>,
   <a href="https://scholar.google.com/citations?user=W5MOKWIAAAAJ&hl=ko" target="_blank">Younggun Cho</a><sup>†</sup>
- 
-**[🤖 Spatial AI and Robotics Lab (SPARO)](https://sites.google.com/view/sparo/%ED%99%88?authuser=0&pli=1)**
+
+  **[🤖 Spatial AI and Robotics Lab (SPARO)](https://sites.google.com/view/sparo/%ED%99%88?authuser=0&pli=1)**
 
   <p align="center"><img src="fig/main.gif" alt="animated" width="75%" /></p>
- 
-  ***\<Keep IMU Stable and Strong\>***
 
+  ***\<Keep IMU Stable and Strong\>***
 </div>
 
 ---
 
 ## 📰 News
-- 🏆 **[May 6, 2026]** KISS-IMU is selected as an **IEEE ICRA 2026 Award Finalist**! 
-- 🎉 **[Jan 31, 2026]** KISS-IMU is **accepted to IEEE ICRA 2026**.
+- 🏆 **May 6, 2026.** Selected as an **IEEE ICRA 2026 Award Finalist**.
+- 🎉 **Jan 31, 2026.** Accepted to **IEEE ICRA 2026**.
 
-## 💡 What is KISS-IMU?
-KISS-IMU learns to denoise raw IMU streams against a self-generated
-LiDAR-odometry pseudo-label, with a GMM-based motion-balanced sampler and
-a frequency gate so under-represented motion regimes are not drowned out
-during training.
+## 💡 Overview
+KISS-IMU denoises raw IMU streams against a self-generated LiDAR-odometry pseudo-label. A GMM-based motion-balanced sampler with a frequency gate keeps under-represented motion regimes from being drowned out during training.
 
-## 🚀 How to use KISS-IMU?
+## 🚀 Getting Started
 
-### 🐳 Quick start with Docker
+### 🐳 Docker (recommended)
 
-The base image (`sparolab/kiss-imu:v1.0`) already contains all
-runtime deps (CUDA, PyTorch, pypose, kiss-icp, small_gicp, pygicp,
-scikit-learn, …). The compose file mounts the repo as the working
-directory automatically — you only need to point one line at your
-dataset path.
+The image `sparolab/kiss-imu:v1.0` ships with all runtime dependencies (CUDA, PyTorch, pypose, kiss-icp, small_gicp, pygicp, scikit-learn).
 
 ```bash
-$ git clone https://github.com/sparolab/KISS-IMU.git
-$ cd KISS-IMU
-
-# 1) edit docker/docker-compose.yml — replace `{dataset_folder}` in
-#    the `volumes:` section with the absolute path to your datasets
-#    (e.g. /mnt/hdd/datasets:/storage1)
-
-# 2) (optional, only if you need GUI apps like RViz from inside)
-$ xhost +local:root
-
-# 3) launch
-$ docker compose -f docker/docker-compose.yml up -d
-$ docker exec -it kiss-imu-ws bash
-
-# inside the container — pwd is already /home/test_ws/src
-$ bash scripts/train.sh
+git clone https://github.com/sparolab/KISS-IMU.git
+cd KISS-IMU
 ```
 
-### 🛠️ Without Docker
+Edit `docker/docker-compose.yml` and replace `{dataset_folder}` under `volumes:` with the absolute path to your datasets (e.g. `/mnt/hdd/datasets:/storage1`). Then launch:
 
 ```bash
-$ pip install -r requirements.txt
-$ bash scripts/train.sh
+docker compose -f docker/docker-compose.yml up -d
+docker exec -it kiss-imu-ws bash
 ```
 
-### 📂 Dataset layout
+Inside the container, `pwd` is already `/home/test_ws/src`:
 
-KISS-IMU expects one top-level `data_root` with one sub-directory per
-sequence:
+```bash
+bash scripts/train.sh
+```
+
+### 🛠️ Native
+
+```bash
+pip install -r requirements.txt
+bash scripts/train.sh
+```
+
+## 📂 Dataset Layout
+
+One top-level `data_root` with one sub-directory per sequence:
 
 ```
 📁 <data_root>/
@@ -89,60 +80,104 @@ sequence:
         └── 📄 timestamps.txt
 ```
 
-Pick the matching `--data-type` (e.g. `kitti`, `mulran`, `diter_os`)
-and the loader handles dataset-specific column indices and coordinate
-transforms. For custom formats or detailed schemas, see
-[examples/dataset_layout.md](examples/dataset_layout.md).
+The loader handles dataset-specific column indices and coordinate transforms once `--data-type` is set (`kitti`, `mulran`, `diter_os`, …). See [examples/dataset_layout.md](examples/dataset_layout.md) for custom formats.
 
-### 🏋️ Training
+## 🏋️ Training
 
 ```bash
-# default: DiTer-OS / Forest_new with KISS-ICP backend
-$ bash scripts/train.sh
-
-# point at a different dataset
-$ DATA_DIR=/storage/KITTI DATA_TYPE=kitti TRAIN_SEQS="07" VALID_SEQS="07" \
-  LO_MODEL=kiss_icp bash scripts/train.sh
+bash scripts/train.sh
 ```
 
-All hyper-params are tunable via env vars at the top of
-[`scripts/train.sh`](scripts/train.sh). To reproduce the **raw-IMU + PVGO**
-baseline (denoted **`Baseline*`** in the paper), use:
+Hyperparameters live as env vars at the top of [`scripts/train.sh`](scripts/train.sh):
+
+| Variable        | Notes |
+| --------------- | ----- |
+| `DATA_DIR`      | Root directory of your dataset |
+| `DATA_TYPE`     | `diter_os` \| `kitti` \| `mulran` \| ... |
+| `TRAIN_SEQS` / `VALID_SEQS` | Sequence names under `DATA_DIR` |
+| `LO_MODEL`      | `kiss_icp` \| `fast_gicp` \| `small_gicp` |
+| `GMM_COMP_NUM`  | `0` = auto-pick K via BIC, otherwise fixed K |
+| `USE_GT`        | GT pose supervision (ablation only, no ICP/PGO) |
+| `USE_SUBMAP`    | Aggregate scans into a sub-map for ICP |
+| `TRAIN_RATIO`   | Fraction of training windows used |
+
+### Ablations
+
+- **GT supervision.** Lets you isolate the GMM reweighting contribution from the LO pseudo-label.
+
+  ```bash
+  USE_GT=true bash scripts/train.sh
+  ```
+
+- **Raw-IMU + PVGO.** Reproduces the `Baseline*` reported in the paper.
+
+  ```bash
+  bash scripts/raw_pvgo.sh
+  ```
+
+## 📊 Evaluation
+
+Evaluate the best checkpoint:
 
 ```bash
-$ bash scripts/raw_pvgo.sh
-```
-
-### 📊 Evaluation
-
-```bash
-# (A) evaluate one specific checkpoint
-$ CKPT=results/.../ckpt/0017.ckpt \
+CKPT=results/.../best_model.ckpt \
   EVAL_SEQS="Forest_new Lawn_lower_night Park_in_day" \
   bash scripts/evaluate.sh
-
-# (B) sweep a directory of checkpoints and pick the best
-$ CKPT_DIR=results/.../ckpt \
-  EVAL_SEQS="Forest_new Lawn_lower_night Park_in_day" \
-  SELECT_METRIC=balanced \
-  bash scripts/evaluate.sh
 ```
 
-Per-window endpoint RPE (translation, rotation) and last-step APE are
-averaged over each evaluation sequence. With multiple checkpoints, the
-best one is selected by `--select-metric` — either a single metric
-(`ape`, `rpe_trans`, `rpe_rot`) or `balanced` (normalized combination
-of all three). Run `bash scripts/evaluate.sh --help` for the full set
-of options.
+Reports per-window endpoint RPE (translation, rotation) and end-point
+APE, averaged per sequence. Run `bash scripts/evaluate.sh --help` for
+all options.
 
-## 🔗 Supplementary
+## 🛰️ Inference
+
+Save full ICP / PGO trajectories as `.npz` + top-down `.png` for plotting or downstream stages:
+
+```bash
+CKPT=results/.../best_model.ckpt \
+  SEQS="Forest_new Park_in_day" \
+  bash scripts/inference.sh
+```
+
+| Variable               | Notes |
+| ---------------------- | ----- |
+| `CKPT`                 | Path to `best_model.ckpt` (required) |
+| `SEQS`                 | Sequence names to run inference on (required) |
+| `LO_MODEL`             | `kiss_icp` \| `fast_gicp` \| `small_gicp` |
+| `USE_ADAPTIVE_WEIGHT`  | Weight ICP factors by overlap, IMU by integrated cov |
+| `USE_SUBMAP`           | Aggregate scans into a sub-map for small_gicp |
+
+Outputs land in `<ckpt-dir>/inference/<seq>/{inference.npz, trajectory.png}`.
+
+## 🔬 Encoder t-SNE
+
+Project encoder features to 2D and color by component id to verify motion-regime separation:
+
+```bash
+CKPT=results/.../best_model.ckpt \
+  TRAIN_SEQS="Forest_new" EVAL_SEQS="Park_in_day" \
+  bash scripts/tsne_encoder.sh
+```
+
+| Variable        | Notes |
+| --------------- | ----- |
+| `CKPT`          | Path to `best_model.ckpt` (required) |
+| `GMM`           | Override the fitted GMM (defaults to `<ckpt-dir>/gmm.joblib`) |
+| `TRAIN_SEQS` / `EVAL_SEQS` | One t-SNE plot per split |
+| `PAIR_MODE`     | `all` plots every component. `farthest` keeps only the two components whose GMM means are most separated (focused separability check). |
+| `PER_COMP`      | Points per component (`0` = auto, capped by `MAX_WINDOWS`) |
+| `MAX_WINDOWS`   | Total cap on plotted points |
+| `MIN_PER_COMP`  | Drop components with fewer windows than this |
+| `PERPLEXITY`    | Auto-clamped down if needed |
+
+Outputs: `<ckpt-dir>/tsne/{tsne_train.png, tsne_eval.png}`. The fitted GMM is saved alongside `best_model.ckpt` during training, so the default path usually just works.
+
+## 🔗 Resources
 - 📄 [arXiv](https://arxiv.org/abs/2603.06205)
 - 🌐 [Project page](https://sparolab.github.io/research/kiss_imu/)
 - 🎬 [Video](https://www.youtube.com/watch?v=cjAFROi-jG0)
 
 ## 📝 Citation
-If you find this work useful, please consider citing:
-
 ```bibtex
 @inproceedings{choi2026kissimu,
   title     = {KISS-IMU: Self-supervised Inertial Odometry with
@@ -154,10 +189,10 @@ If you find this work useful, please consider citing:
 ```
 
 ## 📬 Contact
-- Jiwon Choi — 📧 jiwon2@inha.edu
+Jiwon Choi: jiwon2@inha.edu
 
 ## 📜 License
-For academic usage, the code is released under the BSD 3.0 license. For any commercial purpose, please contact the authors.
+BSD 3.0 for academic use. For commercial use, please contact the authors.
 
 ## ✨ Contributors
 <a href="https://github.com/sparolab/KISS-IMU/graphs/contributors">

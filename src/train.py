@@ -7,10 +7,8 @@ import torch.utils.data as Data
 
 import pypose as pp
 
-# Force matplotlib to use non-interactive backend to avoid tkinter issues
 import matplotlib
 matplotlib.use('Agg')
-# Import matplotlib for saving trajectory plots
 import matplotlib.pyplot as plt
 
 from data.seq_dataset import SeqDataset
@@ -35,21 +33,16 @@ from torch.optim.lr_scheduler import CosineAnnealingLR
 
 args = get_args()
 
-# ---- NEW: frequency-based gating helper ------------------------------------
 import math
 from collections import defaultdict
 
 class FreqGate:
-    """
-    Keep probability gate per GMM component based on recent usage frequency (EMA).
-    Rare components -> higher p_keep. Common components -> lower p_keep.
-    """
     def __init__(self, K:int, device="cpu",
-                 alpha:float=0.7,     # strength of correction; 0=no effect
-                 p_min:float=0.15,    # never drop below this
-                 p_max:float=1.0,     # never exceed this
-                 prior:float=10.0,    # symmetric Dirichlet prior for smoothing
-                 ema_beta:float=0.99  # how slow the moving avg updates
+                 alpha:float=0.7,
+                 p_min:float=0.15,
+                 p_max:float=1.0,
+                 prior:float=10.0,
+                 ema_beta:float=0.99
                  ):
         self.K = K
         self.device = torch.device(device)
@@ -59,9 +52,8 @@ class FreqGate:
         self.prior = prior
         self.beta = ema_beta
 
-        # EMA “counts” proxy; we track a *rate* not raw totals
-        self.rate = torch.zeros(K, dtype=torch.float32, device=self.device)  # approx. usage per step
-        self._warm = 1e-6  # numerical eps
+        self.rate = torch.zeros(K, dtype=torch.float32, device=self.device)
+        self._warm = 1e-6
 
     @torch.no_grad()
     def keep_mask(self, comp_ids: torch.Tensor):
@@ -69,22 +61,19 @@ class FreqGate:
             z = torch.ones(0, device=self.device)
             return z, z
 
-        freq = (self.rate + self.prior) / ((self.rate.sum() + self.prior * self.K) + self._warm)  # (K,)
+        freq = (self.rate + self.prior) / ((self.rate.sum() + self.prior * self.K) + self._warm)
         target = 1.0 / float(self.K)
 
         with torch.no_grad():
             p_keep_per_comp = torch.clamp((target / (freq + self._warm)) ** self.alpha,
-                                          min=self.p_min, max=self.p_max)  # (K,)
+                                          min=self.p_min, max=self.p_max)
 
         comp_ids_dev = comp_ids.detach().to(self.device, non_blocking=True).long()
-        p_keep_per_sample = p_keep_per_comp[comp_ids_dev]                 # (B,) on self.device
+        p_keep_per_sample = p_keep_per_comp[comp_ids_dev]
 
         gate = (torch.rand_like(p_keep_per_sample) < p_keep_per_sample).float()
 
-        # 최소 1개 생존 (배치 기준)
         if gate.sum() < 1:
-            # rare component ~= 낮은 freq → 해당 샘플 선택
-            # 아래 argmin은 배치 내에서 가장 희귀한 컴포넌트에 해당하는 "샘플 인덱스"를 리턴
             rare_sample_idx = torch.argmin(freq[comp_ids_dev])
             gate[rare_sample_idx] = 1.0
 
@@ -92,28 +81,20 @@ class FreqGate:
 
     @torch.no_grad()
     def update(self, comp_ids:torch.Tensor, used_mask:torch.Tensor):
-        """
-        Update EMA usage rate with the actually-used samples of this step.
-        comp_ids: (B,), used_mask: (B,) in {0,1}
-        """
         if comp_ids.numel() == 0:
             return
         K = self.K
         comp_ids = comp_ids.to('cpu', non_blocking=True).long()
         used_mask = used_mask.to('cpu', non_blocking=True).float()
 
-        # step histogram of *used* samples
         step_hist = torch.zeros(K, dtype=torch.float32)
         if used_mask.sum() > 0:
             binc = torch.bincount(comp_ids, weights=used_mask, minlength=K).float()
             step_hist[:len(binc)] = binc
-            # normalize to a rate (so batch size differences don't explode EMA)
             step_hist = step_hist / (used_mask.sum() + 1e-6)
 
-        # EMA update on device
         step_hist = step_hist.to(self.device)
         self.rate = self.beta * self.rate + (1.0 - self.beta) * step_hist
-# -----------------------------------------------------------------------------
 
 
 def train(lo_model, network, loader, optimizer, integrator, data_seq, epoch_i, gravity, global_step,
@@ -121,13 +102,9 @@ def train(lo_model, network, loader, optimizer, integrator, data_seq, epoch_i, g
     network.train()
     total_train_loss = 0
 
-    # 🔥 메모리 정리
-    # torch.cuda.empty_cache()
-
     batch_size = args.batch_size
     icp_count = 0
     pgo_count = 0
-    # Don't reinitialize gt_poses_list each epoch
     if 'gt_poses_list' not in globals():
         global gt_poses_list
         gt_poses_list = []
@@ -137,7 +114,6 @@ def train(lo_model, network, loader, optimizer, integrator, data_seq, epoch_i, g
         if i >= max_iterations:
             break
         corr_data = network(sample)
-        # Use last pose from previous sequence or dataset initial pose
         if len(label_poses_list) > 0:
             if isinstance(label_poses_list[-1], torch.Tensor):
                 pose_vec = label_poses_list[-1][0] if label_poses_list[-1].ndim == 2 else label_poses_list[-1]
@@ -149,7 +125,6 @@ def train(lo_model, network, loader, optimizer, integrator, data_seq, epoch_i, g
                 init_rot = torch.from_numpy(pose_vec[3:]).to(args.device).float()
             init_vel = label_vels_list[-1].to(args.device)
         else:
-            # Use dataset initial state if lists are empty
             init_pos = torch.from_numpy(init_state['pos']).to(args.device).float()
             init_rot = torch.from_numpy(init_state['rot']).to(args.device).float()
             init_vel = torch.from_numpy(init_state['vel']).to(args.device).float()
@@ -184,46 +159,41 @@ def train(lo_model, network, loader, optimizer, integrator, data_seq, epoch_i, g
 
         imu_dts = torch.stack([d.sum() for d in corr_data['dts']]).unsqueeze(-1).to(args.device)
 
-        icp_poses, icp_motions, icp_overlap_scores = lo_model(sample, pp.SE3(label_poses_list[-1]))
+        if getattr(args, 'use_gt', False):
+            prev_anchor = label_poses_list[-1].to(args.device).reshape(1, 7).float()
+            gt_seq = sample['gt_pose1'].to(args.device).float()
+            label_poses = pp.SE3(torch.cat([prev_anchor, gt_seq], dim=0))
+            label_motions = (label_poses[:-1].Inv() @ label_poses[1:]).tensor()
+        else:
+            icp_poses, icp_motions, icp_overlap_scores = lo_model(sample, pp.SE3(label_poses_list[-1]))
 
-        pgo_poses, pgo_vels = optimize(nodes=imu_nodes, vels=imu_vels,
-                                       icp_factors=icp_motions,
-                                       imu_drots=imu_dstates['rot'], imu_dvels=imu_dstates['vel'], imu_dtrans=imu_dstates['pos'],
-                                       imu_dts=imu_dts,
-                                       weights=args.lm_weight,
-                                       gravity=gravity,
-                                       icp_weights=None,     # No adaptive ICP weights
-                                       imu_weights=None,     # No adaptive IMU weights
-                                       device=args.device)
+            pgo_poses, pgo_vels = optimize(nodes=imu_nodes, vels=imu_vels,
+                                           icp_factors=icp_motions,
+                                           imu_drots=imu_dstates['rot'], imu_dvels=imu_dstates['vel'], imu_dtrans=imu_dstates['pos'],
+                                           imu_dts=imu_dts,
+                                           weights=args.lm_weight,
+                                           gravity=gravity,
+                                           icp_weights=None,
+                                           imu_weights=None,
+                                           device=args.device)
 
-        pgo_motions = pgo_poses[:-1].Inv() @ pgo_poses[1:]
-        pgo_dvels   = pgo_vels[1:] - pgo_vels[:-1]
+            pgo_motions = pgo_poses[:-1].Inv() @ pgo_poses[1:]
+            pgo_dvels   = pgo_vels[1:] - pgo_vels[:-1]
 
-        pgo_overlap_scores = batch_pose_aligned_overlap(lo_model.scans0_np, lo_model.scans1_np, pgo_motions)
+            pgo_overlap_scores = batch_pose_aligned_overlap(lo_model.scans0_np, lo_model.scans1_np, pgo_motions)
 
-        better_idx = torch.from_numpy(np.argmax(np.stack([icp_overlap_scores, pgo_overlap_scores]), axis=0)).to(icp_poses.device)
+            better_idx = torch.from_numpy(np.argmax(np.stack([icp_overlap_scores, pgo_overlap_scores]), axis=0)).to(icp_poses.device)
 
-        # ICP/PGO 선택 통계 업데이트
-        icp_count += (better_idx == 0).sum().item()  # 0 = ICP
-        pgo_count += (better_idx == 1).sum().item()  # 1 = PGO
+            icp_count += (better_idx == 0).sum().item()
+            pgo_count += (better_idx == 1).sum().item()
 
-        poses_stack = torch.stack([icp_poses[1:], pgo_poses[1:]], dim=0)
-        motions_stack = torch.stack([icp_motions.tensor(), pgo_motions.tensor()], dim=0)
+            poses_stack = torch.stack([icp_poses[1:], pgo_poses[1:]], dim=0)
+            motions_stack = torch.stack([icp_motions.tensor(), pgo_motions.tensor()], dim=0)
 
-        batch_indices = torch.arange(len(better_idx), device=better_idx.device)
-        label_poses = poses_stack[better_idx, batch_indices]
-        label_poses = torch.cat([icp_poses[:1], label_poses], dim=0)
-        label_motions = motions_stack[better_idx, batch_indices]  
-
-        # mean_icp_overlap_scores = np.mean(icp_overlap_scores)
-        # mean_pgo_overlap_scores = np.mean(pgo_overlap_scores)
-
-        # if mean_icp_overlap_scores >= mean_pgo_overlap_scores:
-        #     label_poses   = icp_poses
-        #     label_motions = icp_motions.tensor()
-        # else:
-        #     label_poses   = pgo_poses
-        #     label_motions = pgo_motions.tensor()
+            batch_indices = torch.arange(len(better_idx), device=better_idx.device)
+            label_poses = poses_stack[better_idx, batch_indices]
+            label_poses = torch.cat([icp_poses[:1], label_poses], dim=0)
+            label_motions = motions_stack[better_idx, batch_indices]
 
         t_all = label_poses.translation()
         dt_world = t_all[1:].contiguous() - t_all[:-1].contiguous()
@@ -233,18 +203,15 @@ def train(lo_model, network, loader, optimizer, integrator, data_seq, epoch_i, g
         label_dvels = label_vels[1:] - label_vels[:-1]
         label_motions = pp.SE3(label_motions)
 
-        # ---------- (1) 배치별 손실 벡터 계산 ----------
         (rot_loss_v, vel_loss_v, pos_loss_v,
          rot_cov_v, vel_cov_v, pos_cov_v) = get_losses(
             imu_nodes, imu_vels, imu_motions, imu_dvels, imu_covs,
             label_poses, label_vels, label_motions, label_dvels,
             args, reduction="none"
-        )  # 각각 (B,)
+        )
 
-        # 🔥 Loss 텐서 크기 검증 및 수정
-        batch_size = sample['accels'].shape[0]  # 실제 배치 크기
-        
-        # Loss 텐서가 스칼라인 경우 배치 차원 추가
+        batch_size = sample['accels'].shape[0]
+
         if rot_loss_v.dim() == 0:
             rot_loss_v = rot_loss_v.unsqueeze(0)
         if vel_loss_v.dim() == 0:
@@ -257,8 +224,7 @@ def train(lo_model, network, loader, optimizer, integrator, data_seq, epoch_i, g
             vel_cov_v = vel_cov_v.unsqueeze(0)
         if pos_cov_v.dim() == 0:
             pos_cov_v = pos_cov_v.unsqueeze(0)
-        
-        # Loss 텐서를 배치 크기에 맞게 확장
+
         if rot_loss_v.shape[0] == 1 and batch_size > 1:
             rot_loss_v = rot_loss_v.expand(batch_size)
             vel_loss_v = vel_loss_v.expand(batch_size)
@@ -267,29 +233,17 @@ def train(lo_model, network, loader, optimizer, integrator, data_seq, epoch_i, g
             vel_cov_v = vel_cov_v.expand(batch_size)
             pos_cov_v = pos_cov_v.expand(batch_size)
 
-        # 🔥 디버깅: Loss 텐서 검증
         if global_step % 10 == 0 or global_step == 1:
-            # print(f"[DEBUG] Loss tensor validation:")
-            # print(f"  batch_size: {batch_size}")
-            # print(f"  imu_nodes: {imu_nodes.shape}, device: {imu_nodes.device}")
-            # print(f"  label_poses: {label_poses.shape}, device: {label_poses.device}")
-            # print(f"  rot_loss_v: {rot_loss_v.shape}, device: {rot_loss_v.device}")
-            # print(f"  vel_loss_v: {vel_loss_v.shape}, device: {vel_loss_v.device}")
-            # print(f"  pos_loss_v: {pos_loss_v.shape}, device: {pos_loss_v.device}")
-            
-            # Loss 텐서의 NaN/Inf 체크
-            for name, tensor in [("rot_loss_v", rot_loss_v), ("vel_loss_v", vel_loss_v), 
+            for name, tensor in [("rot_loss_v", rot_loss_v), ("vel_loss_v", vel_loss_v),
                                ("pos_loss_v", pos_loss_v), ("rot_cov_v", rot_cov_v),
                                ("vel_cov_v", vel_cov_v), ("pos_cov_v", pos_cov_v)]:
                 if torch.isnan(tensor).any() or torch.isinf(tensor).any():
                     print(f"[WARN] {name} contains NaN/Inf!")
                     print(f"  NaN count: {torch.isnan(tensor).sum()}")
                     print(f"  Inf count: {torch.isinf(tensor).sum()}")
-                    # NaN/Inf를 0으로 대체
-                    tensor.data = torch.where(torch.isnan(tensor) | torch.isinf(tensor), 
+                    tensor.data = torch.where(torch.isnan(tensor) | torch.isinf(tensor),
                                            torch.zeros_like(tensor), tensor)
 
-        # ---------- (2) GMM 컴포넌트 라벨 ----------
         if gmm is not None:
             imu_ts_b  = sample['imu_ts']
             accels_b  = sample['accels']
@@ -311,7 +265,6 @@ def train(lo_model, network, loader, optimizer, integrator, data_seq, epoch_i, g
         else:
             comp_ids = [0] * sample['imu_ts'].shape[0]
 
-        # ==== NEW: comp_ids 정규화/보정 (가장 먼저 만든 뒤, 이후 전역적으로 사용) ====
         K = gmm.gmm.n_components if gmm is not None else 1
         comp_ids_t = torch.as_tensor(comp_ids, device=rot_loss_v.device, dtype=torch.long)
         invalid_mask = (comp_ids_t < 0) | (comp_ids_t >= K)
@@ -320,14 +273,12 @@ def train(lo_model, network, loader, optimizer, integrator, data_seq, epoch_i, g
                 monitor.writer.add_scalar('train_gmm/invalid_comp_ids', invalid_mask.sum().item(), global_step)
             comp_ids_t = comp_ids_t.clamp_(0, K-1)
             print(f"\033[91m[WARN] Invalid comp_ids detected; clamped to range 0..{K-1}\033[0m")
-        # 파이썬 리스트도 필요할 때가 있어 conv_mgr용으로 준비
         comp_ids_list = [int(x) for x in comp_ids_t.detach().cpu().tolist()]
 
-        # ---------- (3) 샘플 가중치/마스크 먼저 계산 ----------
         if gmm is not None:
             base_w = gmm.torch_weights_from_labels(
                 np.array(comp_ids_list), device=rot_loss_v.device, dtype=rot_loss_v.dtype
-            )  # (B,)
+            )
         else:
             base_w = torch.ones_like(rot_loss_v)
 
@@ -340,77 +291,58 @@ def train(lo_model, network, loader, optimizer, integrator, data_seq, epoch_i, g
         else:
             active_mask = torch.ones_like(rot_loss_v)
 
-        # ---- NEW: frequency-based keep-prob gate ----------------------------
         if hasattr(train, "_freq_gate") and gmm is not None:
             keep_mask, p_keep = train._freq_gate.keep_mask(comp_ids_t)
             keep_mask = keep_mask.to(dtype=rot_loss_v.dtype, device=rot_loss_v.device)
 
-            # ✅ 활성 샘플(active_mask>0) 중에서도 최소 1개는 살리기
             active_bool = (active_mask > 0).float()
             eff_candidate = active_bool * keep_mask
             if eff_candidate.sum() < 1:
                 active_idx = torch.nonzero(active_bool > 0, as_tuple=False).squeeze(1)
                 if active_idx.numel() > 0:
-                    # 활성 중에서 p_keep이 가장 큰(=희귀할 가능성 높은) 샘플 하나 살림
-                    # (max 반환값은 (values, indices))
                     _, rel_idx = torch.max(p_keep[active_idx], dim=0)
                     pick = active_idx[rel_idx]
                     keep_mask[pick] = 1.0
 
-            # (선택) 로깅
             if global_step % 10 == 0 or global_step == 1:
                 monitor.writer.add_scalar('train_gmm/keep_prob_mean', p_keep.mean().item(), global_step)
                 monitor.writer.add_scalar('train_gmm/keep_rate_batch', keep_mask.mean().item(), global_step)
         else:
             keep_mask = torch.ones_like(rot_loss_v)
 
-        effective_w = base_w * active_mask * keep_mask         # (B,)
+        effective_w = base_w * active_mask * keep_mask
 
-        # ---------- (4) per-sample 총손실 + 스칼라 ----------
         per_sample_total = (
             args.rot_w * rot_loss_v + args.cov_r_w * rot_cov_v +
             args.vel_w * vel_loss_v + args.cov_v_w * vel_cov_v +
             args.pos_w * pos_loss_v + args.cov_t_w * pos_cov_v
-        )  # (B,)
+        )
 
-        # 🔥 디버깅: 텐서 크기 검증
         if global_step % 10 == 0 or global_step == 1:
-            # print(f"[DEBUG] Tensor shapes:")
-            # print(f"  rot_loss_v: {rot_loss_v.shape}, device: {rot_loss_v.device}")
-            # print(f"  vel_loss_v: {vel_loss_v.shape}, device: {vel_loss_v.device}")
-            # print(f"  pos_loss_v: {pos_loss_v.shape}, device: {pos_loss_v.device}")
-            # print(f"  effective_w: {effective_w.shape}, device: {effective_w.device}")
-            # print(f"  per_sample_total: {per_sample_total.shape}, device: {per_sample_total.device}")
-            
-            # NaN/Inf 체크
             if torch.isnan(per_sample_total).any() or torch.isinf(per_sample_total).any():
                 print(f"[WARN] NaN/Inf detected in per_sample_total!")
                 print(f"  NaN count: {torch.isnan(per_sample_total).sum()}")
                 print(f"  Inf count: {torch.isinf(per_sample_total).sum()}")
-                # NaN/Inf를 0으로 대체
-                per_sample_total = torch.where(torch.isnan(per_sample_total) | torch.isinf(per_sample_total), 
+                per_sample_total = torch.where(torch.isnan(per_sample_total) | torch.isinf(per_sample_total),
                                             torch.zeros_like(per_sample_total), per_sample_total)
 
         main_loss = (effective_w * per_sample_total).mean()
 
-        # === 희소 샘플 마스크 계산 (optimizer.step() 전에) ===
         if hasattr(train, "_freq_gate") and gmm is not None:
             with torch.no_grad():
                 freq = (train._freq_gate.rate + train._freq_gate.prior) / \
                        (train._freq_gate.rate.sum() + train._freq_gate.prior * train._freq_gate.K + 1e-6)
                 target = 1.0 / float(train._freq_gate.K)
                 rarity = torch.clamp((target / (freq + 1e-6)) ** train._freq_gate.alpha,
-                                     min=train._freq_gate.p_min, max=train._freq_gate.p_max)  # (K,)
-                r_per = rarity[comp_ids_t]  # (B,)
+                                     min=train._freq_gate.p_min, max=train._freq_gate.p_max)
+                r_per = rarity[comp_ids_t]
                 topk_ratio = getattr(args, "rare_topk_ratio", 0.25)
                 k = max(1, int(topk_ratio * per_sample_total.numel()))
-                
-                # 🔥 안전성 검사: k가 r_per의 크기를 초과하지 않도록
+
                 k = min(k, r_per.numel())
                 if k > 0:
                     idx = torch.topk(r_per, k=k, largest=True).indices
                     rare_mask = torch.zeros_like(per_sample_total)
-                    # 🔥 인덱스 범위 검증
                     valid_idx = idx[idx < rare_mask.numel()]
                     if valid_idx.numel() > 0:
                         rare_mask[valid_idx] = 1.0
@@ -422,36 +354,32 @@ def train(lo_model, network, loader, optimizer, integrator, data_seq, epoch_i, g
             rare_mask = torch.zeros_like(per_sample_total)
 
         rare_loss  = (rare_mask * per_sample_total).sum() / (rare_mask.sum() + 1e-6)
-        rare_boost = getattr(args, "rare_boost", 0.3)  # 하이퍼파라미터
+        rare_boost = getattr(args, "rare_boost", 0.3)
         loss = main_loss + rare_boost * rare_loss
 
         optimizer.zero_grad()
-        
-        # 🔥 Backward 전 안전성 검사
+
         if torch.isnan(loss) or torch.isinf(loss):
             print(f"[ERROR] Loss is NaN/Inf: {loss.item()}")
             print(f"[ERROR] Skipping this batch due to invalid loss")
             continue
-            
+
         if not loss.requires_grad:
             print(f"[WARN] Loss doesn't require grad: {loss.requires_grad}")
             continue
-            
-        # Loss 값이 너무 크면 클리핑
+
         if loss.item() > 1e6:
             print(f"[WARN] Loss too large: {loss.item()}, clipping to 1e6")
             loss = torch.clamp(loss, max=1e6)
-        
+
         loss.backward()
         torch.nn.utils.clip_grad_norm_(network.parameters(), 5.0)
         optimizer.step()
 
-        # === FreqGate EMA 업데이트 (희소 보강까지 반영) ===
         if hasattr(train, "_freq_gate") and gmm is not None:
             usage_w = torch.logical_or(effective_w > 0, rare_mask > 0).float()
             train._freq_gate.update(comp_ids_t, usage_w)
 
-        # ---------- (6) 로깅용 스칼라(배치 평균) ----------
         rot_loss_log = args.rot_w * rot_loss_v.mean().item()
         vel_loss_log = args.vel_w * vel_loss_v.mean().item()
         pos_loss_log = args.pos_w * pos_loss_v.mean().item()
@@ -459,34 +387,32 @@ def train(lo_model, network, loader, optimizer, integrator, data_seq, epoch_i, g
         vel_cov_log  = args.cov_v_w * vel_cov_v.mean().item()
         pos_cov_log  = args.cov_t_w * pos_cov_v.mean().item()
 
-        # ======= Save List =======
         imu_poses_list.extend(imu_nodes.tensor()[1:].detach())
         imu_motions_list.extend(imu_motions.detach())
         imu_vels_list.extend(imu_vels[1:].detach())
         imu_covs_list.extend(imu_covs[1:].detach())
 
-        icp_poses_list.extend(icp_poses.tensor()[1:].detach())
-        icp_motions_list.extend(icp_motions.detach())
-        icp_overlap_score_list.extend(icp_overlap_scores)
+        if not getattr(args, 'use_gt', False):
+            icp_poses_list.extend(icp_poses.tensor()[1:].detach())
+            icp_motions_list.extend(icp_motions.detach())
+            icp_overlap_score_list.extend(icp_overlap_scores)
 
-        pgo_poses_list.extend(pgo_poses.tensor()[1:].detach())
-        pgo_motions_list.extend(pgo_motions.detach())
-        pgo_vels_list.extend(pgo_vels[1:].detach())
-        pgo_overlap_score_list.extend(pgo_overlap_scores)
+            pgo_poses_list.extend(pgo_poses.tensor()[1:].detach())
+            pgo_motions_list.extend(pgo_motions.detach())
+            pgo_vels_list.extend(pgo_vels[1:].detach())
+            pgo_overlap_score_list.extend(pgo_overlap_scores)
 
         label_poses_list.extend(label_poses.tensor()[1:].clone().detach())
         label_motions_list.extend(label_motions.clone().detach())
         label_vels_list.extend(label_vels[1:].clone().detach())
         gt_poses_list.extend(sample['gt_pose1'][1:].clone().detach())
-        # ========================
 
         total_train_loss += loss.item()
 
-        # Log to TensorBoard every 10 steps and on the first step
         global_step += 1
         if global_step % 10 == 0 or global_step == 1:
             monitor.log_losses({
-                'loss': loss.item(),          # combined
+                'loss': loss.item(),
                 'main_loss': main_loss.item(),
                 'rare_loss': rare_loss.item(),
                 'rot_loss': rot_loss_log,
@@ -496,7 +422,6 @@ def train(lo_model, network, loader, optimizer, integrator, data_seq, epoch_i, g
                 'vel_cov_loss': vel_cov_log,
                 'pos_cov_loss': pos_cov_log
             }, step=global_step, prefix="train/")
-
             log_pose_metrics(monitor, global_step,
                 pose_losses={'total': main_loss.item(), 'rot': rot_loss_log, 'vel': vel_loss_log, 'pos': pos_loss_log},
                 cov_losses={'total': rot_cov_log + vel_cov_log + pos_cov_log,
@@ -504,7 +429,6 @@ def train(lo_model, network, loader, optimizer, integrator, data_seq, epoch_i, g
                 rel_errors={'rot': 0.0, 'trans': 0.0},
                 prefix="train_")
 
-            # Log pose trajectories to TensorBoard
             if len(pgo_poses_list) > 1 and len(gt_poses_list) > 1:
                 pgo_poses_np = np.stack([t.detach().cpu().numpy() for t in pgo_poses_list])
                 gt_poses_np  = np.stack([t.detach().cpu().numpy() for t in gt_poses_list])
@@ -520,12 +444,9 @@ def train(lo_model, network, loader, optimizer, integrator, data_seq, epoch_i, g
                     poses_dict, global_step, f"train_all_trajectories_{data_seq}", epoch=epoch_i, train_valid="train"
                 )
 
-            # Log learning rate
             monitor.log_learning_rate(optimizer, global_step)
-            # Log gradients
             monitor.log_gradients(network, global_step, prefix="train_")
 
-            # Log GMM component usage statistics (optional external source)
             if hasattr(train, "_cov_ctrl"):
                 try:
                     comp_stats = train._cov_ctrl.get_component_stats()
@@ -547,16 +468,14 @@ def train(lo_model, network, loader, optimizer, integrator, data_seq, epoch_i, g
     if icp_count + pgo_count > 0:
         labels = ['ICP', 'PGO']
         counts = [icp_count, pgo_count]
-        
-        # 텐서보드에 히스토그램 로깅
+
         monitor.writer.add_histogram(
             f'pose_selection/{data_seq}_epoch_{epoch_i}',
             torch.tensor([0] * icp_count + [1] * pgo_count),
             bins=2,
             global_step=epoch_i
         )
-        
-        # 스칼라 값으로도 로깅 (비율 확인용)
+
         total_count = icp_count + pgo_count
         monitor.writer.add_scalar(f'pose_selection/{data_seq}_icp_ratio', icp_count / total_count, epoch_i)
         monitor.writer.add_scalar(f'pose_selection/{data_seq}_pgo_ratio', pgo_count / total_count, epoch_i)
@@ -632,152 +551,11 @@ def validate(data_loader, network, integrator, data_seq, epoch_i):
     else:
         mean_ep_rpe_trans = mean_ep_rpe_rot = mean_last_ape = float('inf')
 
-    # if not quiet:
     print("====================================================")
     print(f"[Summary] RTE in {data_seq} at epoch {epoch_i}: {mean_ep_rpe_trans:.3f} m, ")
     print(f"[Summary] RRE in {data_seq} at epoch {epoch_i}: {mean_ep_rpe_rot:.3f} deg")
     print("====================================================")
     return mean_ep_rpe_trans+mean_ep_rpe_rot
-    
-# def validate(lo_model, network, loader, integrator, data_seq, epoch_i, gravity, global_step):
-#     network.eval()
-#     total_valid_loss = 0
-
-#     batch_size = args.batch_size
-
-#     with torch.no_grad():
-#         for i, sample in enumerate(tqdm.tqdm(loader)):
-#             # Use last pose from previous sequence or dataset initial pose
-#             if len(valid_poses_list) > 0:
-#                 if isinstance(valid_poses_list[-1], torch.Tensor):
-#                     init_pos = valid_poses_list[-1][:3].clone().detach().to(args.device).float()
-#                     init_rot = valid_poses_list[-1][3:].clone().detach().to(args.device).float()
-#                 else:
-#                     init_pos = torch.from_numpy(valid_poses_list[-1][:3]).to(args.device).float()
-#                     init_rot = torch.from_numpy(valid_poses_list[-1][3:]).to(args.device).float()
-#                 init_vel = valid_vels_list[-1].to(args.device)
-#             else:
-#                 # Use dataset initial state if lists are empty
-#                 init_pos = torch.from_numpy(init_state['pos']).to(args.device).float()
-#                 init_rot = torch.from_numpy(init_state['rot']).to(args.device).float()
-#                 init_vel = torch.from_numpy(init_state['vel']).to(args.device).float()
-#             init_rot = init_rot / torch.linalg.norm(init_rot)
-
-#             init_state = { 'rot': pp.SO3(init_rot),
-#                            'vel': init_vel,
-#                            'pos': init_pos,
-#                            'cov': None}
-
-#             corr_data = network(sample)
-#             imu_states = integrator.integrate(init=init_state,
-#                                               dts=corr_data['dts'], accels=corr_data['accels_corr'], gyros=corr_data['gyros_corr'],
-#                                               cov_accels=corr_data['acc_cov'], cov_gyros=corr_data['gyr_cov'],
-#                                               motion_mode=False)
-
-#             init_state = { 'rot': pp.SO3(init_rot),
-#                            'vel': torch.zeros((1, 3), dtype=torch.float32).to(args.device),
-#                            'pos': torch.zeros((1, 3), dtype=torch.float32).to(args.device),
-#                            'cov': None}
-#             imu_dstates = integrator.integrate(init=init_state,
-#                                                dts=corr_data['dts'], accels=corr_data['accels_corr'], gyros=corr_data['gyros_corr'],
-#                                                cov_accels=corr_data['acc_cov'], cov_gyros=corr_data['gyr_cov'],
-#                                                motion_mode=True)
-#             imu_nodes   = pp.SE3(torch.cat([imu_states['pos'], imu_states['rot'].tensor()], dim=-1)).to(args.device)
-#             imu_vels    = imu_states['vel'].to(args.device)
-#             imu_motions = pp.SE3(torch.cat([imu_dstates['pos'], imu_dstates['rot'].tensor()], dim=-1)).to(args.device)
-#             imu_dvels   = imu_dstates['vel'].to(args.device)
-#             imu_covs    = imu_states['cov'].to(args.device)
-#             imu_dcovs   = imu_dstates['cov'].detach().to(args.device)
-#             imu_dts     = torch.stack([d.sum() for d in corr_data['dts']]).unsqueeze(-1).to(args.device)
-
-#             icp_poses, icp_motions, icp_overlap_scores = lo_model(sample, pp.SE3(valid_poses_list[-1]))
-
-#             if args.use_adaptive_weight:
-#                 pgo_poses, _ = optimize(nodes=imu_nodes, vels=imu_vels,
-#                                         icp_factors=icp_motions,
-#                                         imu_drots=imu_dstates['rot'], imu_dvels=imu_dstates['vel'], imu_dtrans=imu_dstates['pos'],
-#                                         imu_dts=imu_dts,
-#                                         weights=args.lm_weight,
-#                                         gravity=gravity,
-#                                         icp_weights=torch.from_numpy(icp_overlap_scores),
-#                                         imu_weights=imu_dcovs.squeeze(1),
-#                                         device=args.device)
-#             else:
-#                 pgo_poses, _ = optimize(nodes=imu_nodes, vels=imu_vels,
-#                                         icp_factors=icp_motions,
-#                                         imu_drots=imu_dstates['rot'], imu_dvels=imu_dstates['vel'], imu_dtrans=imu_dstates['pos'],
-#                                         imu_dts=imu_dts,
-#                                         weights=args.lm_weight,
-#                                         gravity=gravity,
-#                                         icp_weights=None,
-#                                         imu_weights=None,
-#                                         device=args.device)
-
-#             pgo_motions = pgo_poses[:-1].Inv() @ pgo_poses[1:]
-#             pgo_dts     = torch.stack([d.sum() for d in corr_data['dts']]).unsqueeze(-1)
-#             pgo_vels    = pgo_motions.tensor()[:, :3] / pgo_dts
-#             gt_poses    = pp.SE3(sample['gt_pose1']).to(args.device)
-
-#             diff    = torch.diff(gt_poses.tensor()[:, :3], dim=0)
-#             gt_vels = torch.zeros_like(gt_poses.tensor()[:, :3])
-#             gt_vels[1:] = diff / imu_dts[1:, :]
-#             gt_vels[0]  = init_vel
-
-#             # icp_poses_list.extend(icp_poses.tensor()[1:].detach())
-#             # icp_motions_list.extend(icp_motions.detach())
-
-#             # pgo_poses_list.extend(pgo_poses.tensor()[1:].detach())
-#             # pgo_vels_list.extend(pgo_vels[1:].detach())
-
-#             # gt_poses_list.extend(sample['gt_pose1'][1:].clone().detach())
-
-#             imu_poses  = pp.SE3(torch.cat([imu_states['pos'][1:, :], imu_states['rot'].tensor()[1:, :]], dim=-1)).to(args.device)
-#             valid_loss = get_valid_losses(imu_poses, imu_vels[1:], gt_poses, gt_vels, args)
-#             valid_vels_list.extend(pgo_vels[1:].detach())
-#             valid_poses_list.extend(pgo_poses.tensor()[1:].clone().detach())
-
-#             total_valid_loss += valid_loss.item()
-
-#             # ======= Save List (optional duplicates kept for parity) =======
-#             imu_poses_list.extend(imu_nodes.tensor()[1:].detach())
-#             imu_motions_list.extend(imu_motions.detach())
-#             imu_vels_list.extend(imu_vels[1:].detach())
-#             imu_covs_list.extend(imu_covs[1:].detach())
-#             icp_poses_list.extend(icp_poses.tensor()[1:].detach())
-#             icp_motions_list.extend(icp_motions.detach())
-#             pgo_poses_list.extend(pgo_poses.tensor()[1:].detach())
-#             pgo_motions_list.extend(pgo_motions.detach())
-#             pgo_vels_list.extend(pgo_vels[1:].detach())
-#             # ========================
-
-#             # Log to TensorBoard every 10 steps and on the first step
-#             global_step += 1
-#             if global_step % 10 == 0 or global_step == 1:
-#                 monitor.log_losses({'valid_loss': valid_loss.item()}, step=global_step, prefix="val/")
-
-#                 log_pose_metrics(monitor, global_step,
-#                                  pose_losses={'total': valid_loss.item(), 'rot': 0.0, 'vel': 0.0, 'pos': 0.0},
-#                                  cov_losses={'total': 0.0, 'rot': 0.0, 'vel': 0.0, 'pos': 0.0},
-#                                  rel_errors={'rot': 0.0, 'trans': 0.0},
-#                                  prefix="val_")
-
-#                 if len(pgo_poses_list) > 1 and len(gt_poses_list) > 1:
-#                     pgo_poses_np = np.stack([t.detach().cpu().numpy() for t in pgo_poses_list])
-#                     gt_poses_np  = np.stack([t.detach().cpu().numpy() for t in gt_poses_list])
-#                     poses_dict   = {'gt': gt_poses_np, 'pgo': pgo_poses_np}
-#                     if len(icp_poses_list) > 1:
-#                         icp_poses_np = np.stack([t.detach().cpu().numpy() for t in icp_poses_list])
-#                         poses_dict['icp'] = icp_poses_np
-
-#                     monitor.log_multiple_pose_comparison(
-#                         poses_dict, global_step, f"val_all_trajectories_{data_seq}", epoch=epoch_i, train_valid="val"
-#                     )
-
-#                 monitor.writer.flush()
-#                 if hasattr(monitor.writer, '_file_writer'):
-#                     monitor.writer._file_writer.flush()
-
-#     return total_valid_loss / len(loader), global_step
 
 
 def init_list(dataset):
@@ -817,7 +595,6 @@ def init_list(dataset):
 
 
 def plot_pose_trajs(icp_poses, pgo_poses, label_poses, gt_poses, filename, data_seq, epoch_i, train_set=False):
-    # Force matplotlib to use non-interactive backend to avoid tkinter issues
     import matplotlib
     matplotlib.use('Agg')
     import matplotlib.pyplot as plt
@@ -858,11 +635,9 @@ def plot_pose_trajs(icp_poses, pgo_poses, label_poses, gt_poses, filename, data_
 
 
 def save_component_usage_histogram(cov_ctrl, result_dir):
-    """Save component usage histogram and statistics"""
     import matplotlib.pyplot as plt
 
     try:
-        # Get component statistics
         stats = cov_ctrl.get_component_stats()
         component_usage = stats['component_usage']
         total_updates = stats['total_updates']
@@ -872,10 +647,8 @@ def save_component_usage_histogram(cov_ctrl, result_dir):
             print("No component usage data to save")
             return
 
-        # Create histogram
         fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 6))
 
-        # Histogram of component usage
         component_ids = list(component_usage.keys())
         usage_counts = list(component_usage.values())
 
@@ -931,7 +704,6 @@ def save_component_usage_histogram(cov_ctrl, result_dir):
 
 
 def save_gmm_initial_histogram(gmm, result_dir):
-    """Save initial GMM component distribution histogram"""
     import matplotlib.pyplot as plt
 
     try:
@@ -1067,68 +839,58 @@ def save_ckpt(network, optimizer, epoch_i, data_seq=None, save_best = False, tra
     os.makedirs(os.path.dirname(save_path), exist_ok=True)
 
     if train_set:
+        def _stack_tensors(lst):
+            return np.stack([t.detach().cpu() for t in lst]) if len(lst) > 0 else None
+        def _stack_arrays(lst):
+            return np.stack(lst) if len(lst) > 0 else None
+
         torch.save({
             'epoch': epoch_i,
             'network': network.state_dict(),
             'optimizer': optimizer.state_dict(),
-            'imu_poses_list': np.stack([t.detach().cpu() for t in imu_poses_list]),
-            'imu_motions_list': np.stack([t.detach().cpu() for t in imu_motions_list]),
-            'imu_vels_list': np.stack([t.detach().cpu() for t in imu_vels_list]),
-            'imu_covs_list': np.stack([t.detach().cpu() for t in imu_covs_list]),
-            'icp_poses_list': np.stack([t.detach().cpu() for t in icp_poses_list]),
-            'icp_motions_list': np.stack([t.detach().cpu() for t in icp_motions_list]),
-            'icp_vels_list': np.stack([t.detach().cpu() for t in icp_vels_list]),
-            'icp_overlap_score_list': np.stack(icp_overlap_score_list),
-            'pgo_poses_list': np.stack([t.detach().cpu() for t in pgo_poses_list]),
-            'pgo_motions_list': np.stack([t.detach().cpu() for t in pgo_motions_list]),
-            'pgo_vels_list': np.stack([t.detach().cpu() for t in pgo_vels_list]),
-            'pgo_overlap_score_list': np.stack(pgo_overlap_score_list),
-            'label_poses_list': np.stack([t.detach().cpu() for t in label_poses_list]),
-            'label_motions_list': np.stack([t.detach().cpu() for t in label_motions_list]),
-            'label_vels_list': np.stack([t.detach().cpu() for t in label_vels_list]),
+            'imu_poses_list': _stack_tensors(imu_poses_list),
+            'imu_motions_list': _stack_tensors(imu_motions_list),
+            'imu_vels_list': _stack_tensors(imu_vels_list),
+            'imu_covs_list': _stack_tensors(imu_covs_list),
+            'icp_poses_list': _stack_tensors(icp_poses_list),
+            'icp_motions_list': _stack_tensors(icp_motions_list),
+            'icp_vels_list': _stack_tensors(icp_vels_list),
+            'icp_overlap_score_list': _stack_arrays(icp_overlap_score_list),
+            'pgo_poses_list': _stack_tensors(pgo_poses_list),
+            'pgo_motions_list': _stack_tensors(pgo_motions_list),
+            'pgo_vels_list': _stack_tensors(pgo_vels_list),
+            'pgo_overlap_score_list': _stack_arrays(pgo_overlap_score_list),
+            'label_poses_list': _stack_tensors(label_poses_list),
+            'label_motions_list': _stack_tensors(label_motions_list),
+            'label_vels_list': _stack_tensors(label_vels_list),
         }, save_path)
     else:
         torch.save({
             'epoch': epoch_i,
             'network': network.state_dict(),
             'optimizer': optimizer.state_dict(),
-            # 'imu_poses_list': np.stack([t.detach().cpu() for t in imu_poses_list]),
-            # 'imu_motions_list': np.stack([t.detach().cpu() for t in imu_motions_list]),
-            # 'imu_vels_list': np.stack([t.detach().cpu() for t in imu_vels_list]),
-            # 'imu_covs_list': np.stack([t.detach().cpu() for t in imu_covs_list]),
-            # 'icp_poses_list': np.stack([t.detach().cpu() for t in icp_poses_list]),
-            # 'icp_motions_list': np.stack([t.detach().cpu() for t in icp_motions_list]),
-            # 'icp_vels_list': np.stack([t.detach().cpu() for t in icp_vels_list]),
-            # 'pgo_poses_list': np.stack([t.detach().cpu() for t in pgo_poses_list]),
-            # 'pgo_motions_list': np.stack([t.detach().cpu() for t in pgo_motions_list]),
-            # 'pgo_vels_list': np.stack([t.detach().cpu() for t in pgo_vels_list]),
         }, save_path)
     return ckpt_dir
 
 
 def create_gmm_data_packs(train_packs, train_ratio):
-    """Create limited data packs for GMM training only"""
     gmm_packs = []
-    
+
     for seq, dataset, loader in train_packs:
-        # Calculate how many samples to use for GMM
         total_samples = len(dataset)
         limited_samples = int(total_samples * train_ratio)
-        
-        # Create limited dataset by creating a new dataset with limited data
+
         limited_dataset = SeqDataset(
             data_root=dataset.data_root,
             data_seq=dataset.data_seq,
             data_type=dataset.data_type
         )
-        
-        # Copy only the attributes that GMM actually needs
+
         limited_dataset.imu_ts = dataset.imu_ts[:limited_samples]
         limited_dataset.accels = dataset.accels[:limited_samples]
         limited_dataset.gyros = dataset.gyros[:limited_samples]
         limited_dataset.gravity = dataset.gravity
-        
-        # Create dummy loader (not used for GMM)
+
         dummy_loader = Data.DataLoader(
             dataset=limited_dataset,
             batch_size=1,
@@ -1136,23 +898,17 @@ def create_gmm_data_packs(train_packs, train_ratio):
             shuffle=False,
             drop_last=False
         )
-        
+
         gmm_packs.append((seq, limited_dataset, dummy_loader))
-        
+
         print(f"  * GMM data for {seq}: {total_samples} -> {limited_samples} samples (ratio: {train_ratio:.2f})")
-    
+
     return gmm_packs
 
 
 if __name__ == "__main__":
-    # 🔥 CUDA 디버깅 활성화
-    # os.environ['CUDA_LAUNCH_BLOCKING'] = '1'
-    # os.environ['TORCH_USE_CUDA_DSA'] = '1'
-    
-    # Ensure result directory exists
     os.makedirs(args.result_dir, exist_ok=True)
 
-    # Initialize monitoring
     monitor = TrainingMonitor(
         log_dir=os.path.join(args.result_dir, "monitoring"),
         experiment_name=f"train_01_monitoring_{args.lo_model}",
@@ -1202,14 +958,12 @@ if __name__ == "__main__":
     gmm = None
     conv_mgr = None
     if use_gmm_weights:
-        # Create limited dataset for GMM training only
         print(f"Creating limited GMM dataset with train_ratio: {args.train_ratio}")
         gmm_train_packs = create_gmm_data_packs(train_packs, args.train_ratio)
-        
-        # Store initial GMM for comparison
+
         gmm = GmmModule(gmm_train_packs, K=None, win_sec=0.2).fit()
-        gmm_initial = gmm  # Store initial GMM
-        
+        gmm_initial = gmm
+
         _ = gmm.compute_component_weights(
             source="train", method="effective", beta=0.999,
             normalize="mean1", clamp=(0.1, 10.0)
@@ -1218,13 +972,16 @@ if __name__ == "__main__":
         print("Saving initial GMM distribution...")
         save_gmm_initial_histogram(gmm, args.result_dir)
 
+        gmm_save_path = os.path.join(args.result_dir, "gmm.joblib")
+        gmm.save(gmm_save_path)
+        print(f"GMM saved to: {gmm_save_path}")
+
         from training.convergence import CompConvergenceManager
         conv_mgr = CompConvergenceManager(
             K=gmm.gmm.n_components, ema_beta=0.9,
             improve_tol=1e-3, abs_tol=None, patience=5, min_seen=100
         )
 
-        # ---- NEW: frequency gate (persist across epochs) ----
         if not hasattr(train, "_freq_gate"):
             train._freq_gate = FreqGate(
                 K=gmm.gmm.n_components,
@@ -1236,7 +993,6 @@ if __name__ == "__main__":
                 ema_beta=getattr(args, "freq_ema", 0.99),
             )
 
-    # Initialize global step counters that persist across epochs
     train_global_step = 0
     val_global_step = 0
 
@@ -1275,11 +1031,9 @@ if __name__ == "__main__":
     for epoch_i in range(1, args.epoch+1):
         print(f"====== Epoch {epoch_i}/{args.epoch+1} ======")
 
-        # Use original train_packs for training (with train_ratio applied in train function)
         for train_seq, train_dataset, train_loader in train_packs:
             print(f"  * Training on sequence: {train_seq} *   ")
 
-            # Initialize pose lists for each epoch to show separate trajectories
             init_list(train_dataset)
 
             if args.use_submap:
@@ -1330,20 +1084,11 @@ if __name__ == "__main__":
 
             init_list(valid_dataset)
 
-            # if args.use_submap:
-            #     lo_model = LOModule(lo_model=args.lo_model, T_I_L=valid_dataset.T_I_G, R_I_L=valid_dataset.R_I_L,
-            #                         init_state=icp_poses_list[-1], device_id=args.device, use_submap=True)
-            # else:
-            #     lo_model = LOModule(lo_model=args.lo_model, T_I_L=valid_dataset.T_I_G, R_I_L=valid_dataset.R_I_L,
-            #                         init_state=icp_poses_list[-1], device_id=args.device, use_submap=False)
             integrator = IMUIntegrator(init_state=valid_dataset.init, device=args.device)
 
             gravity = valid_dataset.gravity
             valid_loss = validate(data_loader=valid_loader, network=network, integrator=integrator, data_seq=valid_seq, epoch_i=epoch_i)
-            
-            # valid_loss, val_global_step = validate(lo_model=lo_model, network=network, loader=valid_loader,
-            #                                        integrator=integrator, data_seq=valid_seq, epoch_i=epoch_i,
-            #                                        gravity=gravity, global_step=val_global_step)
+
             epoch_valid_loss += valid_loss
             print(f"  * Valid Loss: {valid_loss} *   ")
             ckpt_dir = save_ckpt(network=network, optimizer=optimizer, epoch_i=epoch_i,

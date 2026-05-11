@@ -26,9 +26,9 @@ def zero_conv_init(m):
 def init_gru(m):
     if isinstance(m, nn.GRU):
         for name, param in m.named_parameters():
-            if "weight_ih" in name:     # 입력->은닉
+            if "weight_ih" in name:
                 nn.init.normal_(param, mean=0.0, std=0.02)
-            elif "weight_hh" in name:   # 은닉->은닉
+            elif "weight_hh" in name:
                 nn.init.orthogonal_(param)
             elif "bias" in name:
                 nn.init.constant_(param, 0.0)
@@ -45,105 +45,16 @@ class IMUNet(nn.Module):
             nn.Conv1d(in_channels=6, out_channels=32, kernel_size=10, stride=5, padding=0),
             nn.GELU(),
             nn.Dropout(0.2),
-            # nn.Conv1d(in_channels=32, out_channels=64, kernel_size=5, stride=1, padding=0),
-            # nn.GELU(),
-            # nn.Dropout(0.3)
         )
-        
+
         self.gru1 = nn.GRU(input_size=32,  hidden_size=64, num_layers=1, batch_first=True)
         self.gru2 = nn.GRU(input_size=64, hidden_size=128, num_layers=1, batch_first=True)
-        
-        # self.gru1 = nn.GRU(input_size=64,  hidden_size=128, num_layers=1, batch_first=True)
-        # self.gru2 = nn.GRU(input_size=128, hidden_size=256, num_layers=1, batch_first=True)
-        
-        # self.accdecoder   = nn.Sequential(nn.Linear(256, 128), nn.GELU(), nn.Linear(128, 3))
-        # self.gyrdecoder   = nn.Sequential(nn.Linear(256, 128), nn.GELU(), nn.Linear(128, 3))
-        # self.acccov_decoder = nn.Sequential(nn.Linear(256, 128), nn.GELU(), nn.Linear(128, 3))
-        # self.gyrcov_decoder = nn.Sequential(nn.Linear(256, 128), nn.GELU(), nn.Linear(128, 3))
-        
-        # self.cnn = nn.Sequential(
-        #     nn.Conv1d(in_channels=6, out_channels=32, kernel_size=10, stride=5, padding=0),
-        #     nn.GELU(),
-        #     nn.Dropout(0.2),
-        #     # nn.Conv1d(in_channels=32, out_channels=64, kernel_size=1, stride=1, padding=0),
-        #     # nn.GELU(),
-        #     # nn.Dropout(0.3)
-        # )
-        
-        # self.gru1 = nn.GRU(input_size=32,  hidden_size=64, num_layers=1, batch_first=True)
-        # self.gru2 = nn.GRU(input_size=64, hidden_size=128, num_layers=1, batch_first=True)
-        # # self.gru1 = nn.GRU(input_size=64,  hidden_size=128, num_layers=1, batch_first=True)
-        # # self.gru2 = nn.GRU(input_size=128, hidden_size=256, num_layers=1, batch_first=True)
-        
-        # self.accdecoder   = nn.Sequential(nn.Linear(256, 128), nn.GELU(), nn.Linear(128, 3))
-        # self.gyrdecoder   = nn.Sequential(nn.Linear(256, 128), nn.GELU(), nn.Linear(128, 3))
-        # self.acccov_decoder = nn.Sequential(nn.Linear(256, 128), nn.GELU(), nn.Linear(128, 3))
-        # self.gyrcov_decoder = nn.Sequential(nn.Linear(256, 128), nn.GELU(), nn.Linear(128, 3))
 
         self.accdecoder   = nn.Sequential(nn.Linear(128, 64), nn.GELU(), nn.Linear(64, 3))
         self.gyrdecoder   = nn.Sequential(nn.Linear(128, 64), nn.GELU(), nn.Linear(64, 3))
         self.acccov_decoder = nn.Sequential(nn.Linear(128, 64), nn.GELU(), nn.Linear(64, 3))
         self.gyrcov_decoder = nn.Sequential(nn.Linear(128, 64), nn.GELU(), nn.Linear(64, 3))
-        # self.cnn = nn.Sequential(
-        #     nn.Conv1d(in_channels=6, out_channels=32, kernel_size=10, stride=1, padding=0),
-        #     nn.GELU(),
-        #     nn.Dropout(0.2),
-        #     nn.Conv1d(in_channels=32, out_channels=64, kernel_size=3, stride=1, padding=0),
-        #     nn.GELU(),
-        #     nn.Dropout(0.3)
-        # )
-        
-        # # self.cnn = nn.Sequential(
-        # #     nn.Conv1d(in_channels=6, out_channels=32, kernel_size=5, stride=5, padding=0),
-        # #     nn.GELU(),
-        # #     nn.Dropout(0.2),
-        # #     nn.Conv1d(in_channels=32, out_channels=64, kernel_size=2, stride=1, padding=0),
-        # #     nn.GELU(),
-        # #     nn.Dropout(0.3)
-        # # )
-        
-        # # self.cnn = nn.Sequential(
-        # #     nn.Conv1d(in_channels=6, out_channels=32, kernel_size=5, stride=1, padding=0),
-        # #     nn.GELU(),
-        # #     nn.Dropout(0.2),
-        # #     nn.Conv1d(in_channels=32, out_channels=64, kernel_size=3, stride=1, padding=0),
-        # #     nn.GELU(),
-        # #     nn.Dropout(0.3)
-        # # )
-        
-        # # self.gru1 = nn.GRU(input_size=32,  hidden_size=64, num_layers=1, batch_first=True)
-        # # self.gru2 = nn.GRU(input_size=64, hidden_size=128, num_layers=1, batch_first=True)
-        # self.gru1 = nn.GRU(input_size=64,  hidden_size=128, num_layers=1, batch_first=True)
-        # self.gru2 = nn.GRU(input_size=128, hidden_size=256, num_layers=1, batch_first=True)
-        
-        # self.accdecoder   = nn.Sequential(nn.Linear(256, 128), nn.GELU(), nn.Linear(128, 3))
-        # self.gyrdecoder   = nn.Sequential(nn.Linear(256, 128), nn.GELU(), nn.Linear(128, 3))
-        # self.acccov_decoder = nn.Sequential(nn.Linear(256, 128), nn.GELU(), nn.Linear(128, 3))
-        # self.gyrcov_decoder = nn.Sequential(nn.Linear(256, 128), nn.GELU(), nn.Linear(128, 3))
-        # self.cnn = nn.Sequential(
-        #     nn.Conv1d(in_channels=6, out_channels=32, kernel_size=10, stride=10, padding=0),
-        #     nn.GELU(),
-        #     nn.Dropout(0.2),
-        #     # nn.Conv1d(in_channels=32, out_channels=64, kernel_size=1, stride=1, padding=0),
-        #     # nn.GELU(),
-        #     # nn.Dropout(0.3)
-        # )
-        
-        # self.gru1 = nn.GRU(input_size=32,  hidden_size=64, num_layers=1, batch_first=True)
-        # self.gru2 = nn.GRU(input_size=64, hidden_size=128, num_layers=1, batch_first=True)
-        
-        # # self.accdecoder   = nn.Sequential(nn.Linear(256, 128), nn.GELU(), nn.Linear(128, 3))
-        # # self.gyrdecoder   = nn.Sequential(nn.Linear(256, 128), nn.GELU(), nn.Linear(128, 3))
-        # # self.acccov_decoder = nn.Sequential(nn.Linear(256, 128), nn.GELU(), nn.Linear(128, 3))
-        # # self.gyrcov_decoder = nn.Sequential(nn.Linear(256, 128), nn.GELU(), nn.Linear(128, 3))
 
-        # self.accdecoder   = nn.Sequential(nn.Linear(128, 64), nn.GELU(), nn.Linear(64, 3))
-        # self.gyrdecoder   = nn.Sequential(nn.Linear(128, 64), nn.GELU(), nn.Linear(64, 3))
-        # self.acccov_decoder = nn.Sequential(nn.Linear(128, 64), nn.GELU(), nn.Linear(64, 3))
-        # self.gyrcov_decoder = nn.Sequential(nn.Linear(128, 64), nn.GELU(), nn.Linear(64, 3))
-
-        # self.apply(gaussian_init_weights)
-        # self.apply(init_gru)
         self.acc_std = torch.tensor(0.1, dtype=torch.float32).to(device)
         self.gyr_std = torch.tensor(np.pi/180, dtype=torch.float32).to(device)
         
@@ -154,12 +65,9 @@ class IMUNet(nn.Module):
         x = x.transpose(-1, -2)
         
         valid_feat_length = ((valid_length - 2) - 2)
-        
-        # packed = nn.utils.rnn.pack_padded_sequence(x, valid_feat_length, batch_first=True, enforce_sorted=False)
-        
+
         x, _ = self.gru1(x)
         x, _ = self.gru2(x)
-        # x, _ = nn.utils.rnn.pad_packed_sequence(x, batch_first=True)
         return x
     
     def cov_decoder(self, x):
@@ -188,12 +96,6 @@ class IMUNet(nn.Module):
         return acc_noise, gyr_noise, acc_cov, gyr_cov
     
     def broadcast_to_valid(self, orig, update, valid_length, mode='add'):
-        """
-        orig: (B, T, 3)
-        update: (B, D, 3)
-        valid_length: (B,)
-        mode: 'add' or 'assign'
-        """
         result = orig.clone()
         outs = []
         for b in range(self.B):
@@ -212,7 +114,6 @@ class IMUNet(nn.Module):
                 elif mode == 'assign':
                     result[b, start:end] = update[b, d]
                 start = end
-            # 유효 구간만 잘라서 저장
             outs.append(result[b, :vlen].clone())
         return outs
     

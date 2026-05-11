@@ -51,6 +51,13 @@ def get_args():
     
     parser.add_argument('--use-submap', action='store_true', help='Use adaptive weight during inference')
     parser.add_argument('--no-submap', action='store_true', help='Do not use adaptive weight during inference')
-    
+
+    # Supervision source: by default labels come from the better of ICP / PGO
+    # (self-supervised pseudo-label). With --use-gt, labels are taken directly
+    # from `sample['gt_pose1']` — useful for an oracle / ablation run that
+    # isolates the contribution of GMM reweighting from the LO pseudo-label.
+    parser.add_argument('--use-gt', action='store_true',
+                        help='Train against GT poses instead of the ICP/PGO pseudo-label')
+
     args = parser.parse_args()
     return args
