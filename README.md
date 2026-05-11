@@ -107,7 +107,7 @@ $ DATA_DIR=/storage/KITTI DATA_TYPE=kitti TRAIN_SEQS="07" VALID_SEQS="07" \
 
 All hyper-params are tunable via env vars at the top of
 [`scripts/train.sh`](scripts/train.sh). To reproduce the **raw-IMU + PVGO**
-baseline (denoted `*` in the paper), use:
+baseline (denoted `Baseline<sup>*</sup>` in the paper), use:
 
 ```bash
 $ bash scripts/raw_pvgo.sh
