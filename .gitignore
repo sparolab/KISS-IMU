@@ -43,7 +43,6 @@ Thumbs.db
 .env.local
 
 # Data (mounted from host, never committed)
-data/
 storage/
 storage1/
 datasets/

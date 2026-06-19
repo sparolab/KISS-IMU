@@ -30,9 +30,6 @@ import torch
 import matplotlib
 import matplotlib.pyplot as plt
 
-method = 'airimu'
-train_ratio = 100
-
 args = get_args()
 
 
@@ -386,7 +383,7 @@ if __name__ == "__main__":
     for inference_seq in args.inference_seqs:
         print(f"  * Inferencing on sequence: {inference_seq} *   ")
         
-        inference_dataset = SeqDataset(data_root=args.data_root, data_seq=inference_seq, data_type=args.data_type, method=method, train_ratio=train_ratio)
+        inference_dataset = SeqDataset(data_root=args.data_root, data_seq=inference_seq, data_type=args.data_type)
         inference_loader = Data.DataLoader(dataset=inference_dataset, batch_size=args.batch_size, num_workers=args.worker_num, shuffle=False, drop_last=True, collate_fn=collate_fn)
         init_list(inference_dataset)
         

@@ -22,14 +22,15 @@ ROT_W=${ROT_W:-1e3}; VEL_W=${VEL_W:-1e0}; POS_W=${POS_W:-1e2}
 COV_R_W=${COV_R_W:-1e-4}; COV_V_W=${COV_V_W:-1e-5}; COV_T_W=${COV_T_W:-1e-5}
 ROT_COV_S=${ROT_COV_S:-1e-3}; VEL_COV_S=${VEL_COV_S:-1e-3}; POS_COV_S=${POS_COV_S:-1e-3}
 
-RESULT_BASE=${RESULT_BASE:-results_raw}
+REPO_ROOT=$(cd "$(dirname "$0")/.." && pwd)
+RESULT_BASE=${RESULT_BASE:-${REPO_ROOT}/results_raw}
 mkdir -p "$RESULT_BASE"
 
 train_seqs_arr=( $TRAIN_SEQS )
 valid_seqs_arr=( $VALID_SEQS )
 infer_seqs_arr=( $INFERENCE_SEQS )
 
-cd "$(dirname "$0")/../src"
+cd "${REPO_ROOT}/src"
 python3 raw_pvgo.py \
     --result-dir "${RESULT_BASE}" \
     --data-type ${DATA_TYPE} \
