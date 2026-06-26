@@ -41,6 +41,7 @@ def collate_fn(batch):
     batch_data['valid_length'] = torch.stack(batch_data['valid_length'])
     batch_data['gt_pose0'] = torch.stack(batch_data['gt_pose0'])
     batch_data['gt_pose1'] = torch.stack(batch_data['gt_pose1'])
+    batch_data['gt_velocity'] = torch.stack(batch_data['gt_velocity'])
     return batch_data
 
 

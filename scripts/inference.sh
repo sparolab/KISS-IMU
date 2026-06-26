@@ -6,7 +6,7 @@
 #
 # Override via env vars:
 #   CKPT=/abs/path/to/best_model.ckpt
-#   DATA_TYPE=kitti  DATA_DIR=/storage/KITTI
+#   DATA_TYPE=diter_os  DATA_DIR=/storage/DiTer_os
 #   SEQS="07 09"
 #   bash scripts/inference.sh
 set -euo pipefail

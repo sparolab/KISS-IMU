@@ -19,7 +19,7 @@ import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 
-from data.eval_dataset import SeqDataset
+from data.eval_dataset import SeqDataset, collate_fn
 from training.integrator import IMUIntegrator
 from models.imu_net import IMUNet
 
@@ -28,9 +28,10 @@ def parse_args():
     p = argparse.ArgumentParser()
     p.add_argument('--data-root', type=str, required=True,
                    help='dataset root containing <SEQ>/imu.csv, gt_pose.csv, points/')
+    # Only diter_os / diter++ have dedicated handling; add your own data-type
+    # branch in data/seq_dataset.py (and here) for other datasets.
     p.add_argument('--data-type', type=str, required=True,
-                   choices=['mulran', 'yeoncheon', 'kitti', 'diter++', 'diter_os',
-                            'tailrobot', 'kimera', 'botanic_velodyne'])
+                   choices=['diter_os', 'diter++'])
     p.add_argument('--eval-seqs', nargs='+', type=str, required=True)
 
     p.add_argument('--ckpt', type=str, required=True,
@@ -64,15 +65,14 @@ def eval_state(data_loader, integrator, network, device, save_plot_path=None):
         init_state = {'rot': pp.SO3(init_rot), 'vel': init_vel, 'pos': init_pos, 'cov': None}
 
         corr = network(sample)
-        out_state, _ = integrator.integrate(
-            init_state,
-            corr['dts'][0].unsqueeze(0),
-            corr['accels_corr'][0].unsqueeze(0),
-            corr['gyros_corr'][0].unsqueeze(0),
-            corr['acc_cov'][0].unsqueeze(0),
-            corr['gyr_cov'][0].unsqueeze(0),
+        out_state = integrator.integrate(
+            init=init_state,
+            dts=corr['dts'], accels=corr['accels_corr'], gyros=corr['gyros_corr'],
+            cov_accels=corr['acc_cov'], cov_gyros=corr['gyr_cov'],
+            motion_mode=False,
         )
-        pred_se3 = pp.SE3(torch.cat([out_state['pos'], out_state['rot'].tensor()], dim=-1)).to(device)
+        pred_traj = pp.SE3(torch.cat([out_state['pos'], out_state['rot'].tensor()], dim=-1)).to(device)
+        pred_se3 = pred_traj[-1]   # endpoint pose of the window
 
         gt0 = sample['gt_pose0'][0].to(device).float()
         gt_seq = sample['gt_pose1'].to(device).float()
@@ -127,7 +127,8 @@ def evaluate_ckpt(ckpt_path, args):
     ckpt_tag = os.path.splitext(os.path.basename(ckpt_path))[0]
     for seq in args.eval_seqs:
         ds = SeqDataset(args.data_root, seq, args.data_type, args.window_size)
-        dl = DataLoader(ds, batch_size=1, shuffle=False, num_workers=args.num_workers)
+        dl = DataLoader(ds, batch_size=1, shuffle=False, num_workers=args.num_workers,
+                        collate_fn=collate_fn)
         integrator = IMUIntegrator(init_state=ds.init, prop_cov=True,
                                    gravity=ds.gravity, device=args.device)
         plot_path = (os.path.join(args.result_dir, f'{ckpt_tag}_{seq}_xy.png')

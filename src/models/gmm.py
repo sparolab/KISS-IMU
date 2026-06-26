@@ -75,8 +75,8 @@ class GmmModule:
                    gyros: np.ndarray,
                    gravity: Optional[np.ndarray] = None,
                    reduce: str = "median",          # "last" | "mean" | "median" | "tail-mean" | "max" | "index" | "mode" | "soft-mode"
-                   idx: Optional[int] = None,       # reduce="index"일 때 사용할 위치
-                   tail_ratio: float = 0.25,        # reduce="tail-mean"에서 사용 (마지막 구간 비율)
+                   idx: Optional[int] = None,       # position used when reduce="index"
+                   tail_ratio: float = 0.25,        # used by reduce="tail-mean" (tail-segment fraction)
                    return_proba: bool = False):
 
         lin_sp, ang_sp = self._imu_linear_angular_speed(imu_ts, accels, gyros, gravity)
@@ -86,7 +86,7 @@ class GmmModule:
 
         reduce = (reduce or "last").lower()
 
-        # --- 보팅 기반 분기 (창 전체를 사용) ---
+        # --- voting-based branch (uses the whole window) ---
         if reduce in ("mode", "soft-mode"):
             X_win = np.stack([lin_sp, ang_sp], axis=1)    # (n,2)
 
@@ -160,7 +160,7 @@ class GmmModule:
     def compute_component_weights(self,
                                   source: str = "train",     # "train" | "mixing"
                                   method: str = "effective", # "inverse" | "sqrt_inv" | "effective"
-                                  beta: float = 0.999,       # method="effective"에서 사용(Class-Balanced Loss)
+                                  beta: float = 0.999,       # used by method="effective" (Class-Balanced Loss)
                                   normalize: str = "mean1",  # "mean1" | "sum1" | "none"
                                   clamp: Tuple[float, float] = (0.1, 10.0),
                                   recalc: bool = True) -> np.ndarray:

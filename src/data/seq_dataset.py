@@ -13,7 +13,7 @@ from data.collate import collate_fn
 
 
 class SeqDataset(Data.Dataset):
-    def __init__(self, data_root, data_seq=None, data_type='mulran', batch_shift=1, method='ours', train_ratio=100):
+    def __init__(self, data_root, data_seq=None, data_type='diter_os', batch_shift=1, method='ours', train_ratio=100):
         self.data_root = data_root
         self.data_seq = data_seq
         self.data_dir = os.path.join(self.data_root, self.data_seq)        
@@ -22,40 +22,8 @@ class SeqDataset(Data.Dataset):
         self.method = method
         self.train_ratio = train_ratio
         self.gravity = torch.tensor([0., 0., 9.81], dtype=torch.float32)
-        if self.data_type == 'mulran':
-            self.lidar_dtype = [('x', np.float32), ('y', np.float32), ('z', np.float32), ('intensity', np.float32)]
-            self.acc_idx = 11; self.gyr_idx = 8
-            self.T_I_L = np.array([1.77, -0.00, -0.05])
-            self.R_I_L = np.array([[-1,  0,  0],[ 0, -1,  0],[ 0,  0,  1]])
-            self.T_I_G = np.array([6.57695566e-02, 1.06635747e-02, -1.75469073e+00])
-            self.R_I_G = np.array([[ 9.99982948e-01, -5.83983848e-03,  5.23598776e-06],
-                                   [ 5.83983849e-03,  9.99982948e-01, -1.74532925e-06],
-                                   [-5.22570603e-06,  1.77587681e-06,  1.00000000e+00]])
-            self.imu_window_size = 15
-            
-        elif self.data_type == 'yeoncheon':
-            self.lidar_dtype = [('x', np.float64), ('y', np.float64), ('z', np.float64), ('intensity', np.float64)]
-            self.acc_idx = 4; self.gyr_idx = 1
-            self.T_I_L = np.zeros(3)
-            self.R_I_L = np.eye(3)
-            self.T_I_G = np.zeros(3)
-            self.R_I_G = np.eye(3)
-            self.imu_window_size = 15
-            
-        elif self.data_type == 'kitti':
-            self.lidar_dtype = [('x', np.float32), ('y', np.float32), ('z', np.float32), ('intensity', np.float32)]
-            self.acc_idx = 15; self.gyr_idx = 21
-            self.T_I_L = np.array([-8.086759e-01,3.195559e-01,-7.997231e-01])
-            self.R_I_L = np.array([[9.999976e-01,7.553071e-04,-2.035826e-03],
-                                   [-7.854027e-04,9.998898e-01,-1.482298e-02],
-                                   [2.024406e-03,1.482454e-02,9.998881e-01]])
-            self.T_I_G = np.zeros(3)
-            self.R_I_G = np.array([[  0,  0,  1 ],
-                                   [ -1,  0,  0 ],
-                                   [  0, -1,  0]])
-            self.imu_window_size = 15
-            
-        elif self.data_type == 'diter++':
+
+        if self.data_type == 'diter++':
             self.lidar_dtype = [('x', np.float64), ('y', np.float64), ('z', np.float64), ('intensity', np.float64)]
             self.acc_idx = 4; self.gyr_idx = 1
             self.T_I_L = np.zeros(3)
@@ -77,34 +45,19 @@ class SeqDataset(Data.Dataset):
             self.R_I_G = np.eye(3)
             self.imu_window_size = 15
             
-        elif self.data_type == 'tailrobot':
-            self.lidar_dtype = [('x', np.float64),('y',np.float64),('z',np.float64),('intensity',np.float64)]
-            self.acc_idx = 4; self.gyr_idx = 1
-            self.T_I_L = np.zeros(3)
-            self.R_I_L = np.eye(3)
-            self.T_I_G = np.zeros(3)
-            self.R_I_G = np.eye(3)
-            self.imu_window_size = 15
-            
-        elif self.data_type == 'kimera':
-            self.lidar_dtype = [('x', np.float64),('y',np.float64),('z',np.float64),('intensity',np.float64)]
-            self.acc_idx = 4; self.gyr_idx = 1
-            self.T_I_L = np.zeros(3)
-            self.R_I_L = np.array([[ 0, 1, 0],
-                                   [ 0, 0,-1],
-                                   [-1, 0, 0]])
-            self.T_I_G = np.zeros(3)
-            self.R_I_G = np.eye(3)
-            self.gravity = torch.tensor([0., -9.81, 0.], dtype=torch.float32)
-            self.imu_window_size = 35
         else:
+            # Generic fallback for a new dataset. Adjust these to match your
+            # data: lidar_dtype if your .bin layout differs from the default
+            # below, acc_idx/gyr_idx for your imu.csv column order, and
+            # R_I_L / R_I_G for your IMU<->LiDAR / IMU<->global extrinsics.
+            self.lidar_dtype = [('x', np.float64),('y',np.float64),('z',np.float64),('intensity',np.float64)]
             self.acc_idx = 4; self.gyr_idx = 1
             self.T_I_L = np.zeros(3);
             self.R_I_L = np.eye(3)
             self.T_I_G = np.zeros(3);
             self.R_I_G = np.eye(3)
             self.imu_window_size = 15
-        
+
         self.imu_ts, self.imu_dts, self.accels, self.gyros = self.load_imu(self.data_dir)
         self.scan_files, self.scan_ts = self.load_scan(self.data_dir)
         self.gt_ts, self.gt_poses = self.load_gt(self.data_dir)

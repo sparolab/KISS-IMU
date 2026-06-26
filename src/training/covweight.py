@@ -30,7 +30,7 @@ class CovWeightController:
                rot_cov_loss, vel_cov_loss, pos_cov_loss, global_step: int, 
                comp_ids=None, comp_weights=None):
         b = self.beta
-        # EMA 업데이트
+        # EMA update
         self.ema_state_r = b*self.ema_state_r + (1-b)*rot_loss.detach()
         self.ema_cov_r   = b*self.ema_cov_r   + (1-b)*rot_cov_loss.detach()
         self.ema_state_v = b*self.ema_state_v + (1-b)*vel_loss.detach()
@@ -39,7 +39,7 @@ class CovWeightController:
         self.ema_cov_t   = b*self.ema_cov_t   + (1-b)*pos_cov_loss.detach()
 
         eps = 1e-8
-        # state 대비 cov 비중을 alpha로 맞춤
+        # scale the cov weight relative to the state term by alpha
         w_r = torch.clamp(self.alpha * self.ema_state_r/(self.ema_cov_r+eps),
                           self.min_w, self.max_w)
         w_v = torch.clamp(self.alpha * self.ema_state_v/(self.ema_cov_v+eps),
@@ -47,7 +47,7 @@ class CovWeightController:
         w_t = torch.clamp(self.alpha * self.ema_state_t/(self.ema_cov_t+eps),
                           self.min_w, self.max_w)
 
-        # 워밍업
+        # warmup
         m = min(1.0, float(global_step+1)/float(self.warmup_steps))
         
         # Track component usage if comp_ids and comp_weights are provided

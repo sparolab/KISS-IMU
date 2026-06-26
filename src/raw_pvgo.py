@@ -117,7 +117,7 @@ def update_plot_dual(ax_xy, ax_xz, lines,
         if line is not None and arr is not None and arr.size:
             line.set_data(arr[:, ix], arr[:, iy])
 
-    # 데이터 반영
+    # apply data
     set_2d(lines.get('gt_xy'),    gt_poses,  0, 1)
     set_2d(lines.get('icp_xy'),   icp_poses, 0, 1)
     set_2d(lines.get('pgo_xy'),   pgo_poses, 0, 1)
@@ -387,7 +387,7 @@ if __name__ == "__main__":
         inference_loader = Data.DataLoader(dataset=inference_dataset, batch_size=args.batch_size, num_workers=args.worker_num, shuffle=False, drop_last=True, collate_fn=collate_fn)
         init_list(inference_dataset)
         
-        lo_model = LOModule(lo_model=args.lo_model, T_I_L=inference_dataset.T_I_G, R_I_L=inference_dataset.R_I_L, init_state=icp_poses_list[-1], device_id=args.device)
+        lo_model = LOModule(lo_model=args.lo_model, T_I_L=inference_dataset.T_I_L, R_I_L=inference_dataset.R_I_L, init_state=icp_poses_list[-1], device_id=args.device)
         integrator = IMUIntegrator(init_state=inference_dataset.init, device=args.device)
         
         inference_loss = inference(lo_model=lo_model, loader=inference_loader, integrator=integrator, data_seq=inference_seq, gravity=inference_dataset.gravity)

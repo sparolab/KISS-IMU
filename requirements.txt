@@ -1,6 +1,6 @@
 # KISS-IMU runtime requirements.
 # These are already preinstalled in the official Docker image
-# (jivvon1/ros-noetic-cuda:v3). List them here for reference and
+# (sparolab/kiss-imu:v1.0). List them here for reference and
 # for users who want to run outside the container.
 
 # core

@@ -233,16 +233,17 @@ def train(lo_model, network, loader, optimizer, integrator, data_seq, epoch_i, g
             vel_cov_v = vel_cov_v.expand(batch_size)
             pos_cov_v = pos_cov_v.expand(batch_size)
 
-        if global_step % 10 == 0 or global_step == 1:
-            for name, tensor in [("rot_loss_v", rot_loss_v), ("vel_loss_v", vel_loss_v),
-                               ("pos_loss_v", pos_loss_v), ("rot_cov_v", rot_cov_v),
-                               ("vel_cov_v", vel_cov_v), ("pos_cov_v", pos_cov_v)]:
-                if torch.isnan(tensor).any() or torch.isinf(tensor).any():
+        # Sanitize NaN/Inf in every step so corrupted values never reach backward.
+        for name, tensor in [("rot_loss_v", rot_loss_v), ("vel_loss_v", vel_loss_v),
+                           ("pos_loss_v", pos_loss_v), ("rot_cov_v", rot_cov_v),
+                           ("vel_cov_v", vel_cov_v), ("pos_cov_v", pos_cov_v)]:
+            if torch.isnan(tensor).any() or torch.isinf(tensor).any():
+                if global_step % 10 == 0 or global_step == 1:
                     print(f"[WARN] {name} contains NaN/Inf!")
                     print(f"  NaN count: {torch.isnan(tensor).sum()}")
                     print(f"  Inf count: {torch.isinf(tensor).sum()}")
-                    tensor.data = torch.where(torch.isnan(tensor) | torch.isinf(tensor),
-                                           torch.zeros_like(tensor), tensor)
+                tensor.data = torch.where(torch.isnan(tensor) | torch.isinf(tensor),
+                                       torch.zeros_like(tensor), tensor)
 
         if gmm is not None:
             imu_ts_b  = sample['imu_ts']
@@ -318,13 +319,13 @@ def train(lo_model, network, loader, optimizer, integrator, data_seq, epoch_i, g
             args.pos_w * pos_loss_v + args.cov_t_w * pos_cov_v
         )
 
-        if global_step % 10 == 0 or global_step == 1:
-            if torch.isnan(per_sample_total).any() or torch.isinf(per_sample_total).any():
+        if torch.isnan(per_sample_total).any() or torch.isinf(per_sample_total).any():
+            if global_step % 10 == 0 or global_step == 1:
                 print(f"[WARN] NaN/Inf detected in per_sample_total!")
                 print(f"  NaN count: {torch.isnan(per_sample_total).sum()}")
                 print(f"  Inf count: {torch.isinf(per_sample_total).sum()}")
-                per_sample_total = torch.where(torch.isnan(per_sample_total) | torch.isinf(per_sample_total),
-                                            torch.zeros_like(per_sample_total), per_sample_total)
+            per_sample_total = torch.where(torch.isnan(per_sample_total) | torch.isinf(per_sample_total),
+                                        torch.zeros_like(per_sample_total), per_sample_total)
 
         main_loss = (effective_w * per_sample_total).mean()
 
@@ -514,8 +515,9 @@ def validate(data_loader, network, integrator, data_seq, epoch_i):
                                          dts=corr_data['dts'], accels=corr_data['accels_corr'], gyros=corr_data['gyros_corr'],
                                          cov_accels=corr_data['acc_cov'], cov_gyros=corr_data['gyr_cov'],
                                          motion_mode=False)
- 
-        pred_last_se3 = pp.SE3(torch.cat([out_state['pos'], out_state['rot'].tensor()], dim=-1)).to(device)
+
+        pred_traj = pp.SE3(torch.cat([out_state['pos'], out_state['rot'].tensor()], dim=-1)).to(device)
+        pred_last_se3 = pred_traj[-1]   # endpoint pose of the window
 
         gt0 = sample['gt_pose0'][0].to(device).float()
         gt_seq = sample['gt_pose1'].to(device).float()
@@ -550,6 +552,11 @@ def validate(data_loader, network, integrator, data_seq, epoch_i):
         mean_last_ape     = sum_last_ape / n_windows
     else:
         mean_ep_rpe_trans = mean_ep_rpe_rot = mean_last_ape = float('inf')
+
+    # expose endpoint trajectories so the epoch loop can plot pred-vs-gt
+    global valid_pred_last_list, valid_gt_last_list
+    valid_pred_last_list = pred_last_list
+    valid_gt_last_list = gt_last_list
 
     print("====================================================")
     print(f"[Summary] RTE in {data_seq} at epoch {epoch_i}: {mean_ep_rpe_trans:.3f} m, ")
@@ -590,6 +597,10 @@ def init_list(dataset):
     valid_poses_list = [torch.from_numpy(init_pose).reshape(7)]
     valid_vels_list = [init_state['vel']]
 
+    global valid_pred_last_list, valid_gt_last_list
+    valid_pred_last_list = []
+    valid_gt_last_list = []
+
     global gt_poses_list
     gt_poses_list = []
 
@@ -628,6 +639,33 @@ def plot_pose_trajs(icp_poses, pgo_poses, label_poses, gt_poses, filename, data_
 
     except Exception as e:
         print(f"Warning: Error saving trajectory plot to {filename}: {e}")
+        try:
+            plt.close('all')
+        except:
+            pass
+
+
+def plot_valid_endpoints(pred_poses, gt_poses, filename, data_seq, epoch_i):
+    import matplotlib
+    matplotlib.use('Agg')
+    import matplotlib.pyplot as plt
+
+    try:
+        fig, ax = plt.subplots()
+        if gt_poses is not None and len(gt_poses) > 0:
+            gt_np = np.asarray(gt_poses)
+            ax.plot(gt_np[:, 0], gt_np[:, 1], 'k--', label='GT (endpoints)', linewidth=2.5, zorder=1)
+        if pred_poses is not None and len(pred_poses) > 0:
+            pred_np = np.asarray(pred_poses)
+            ax.plot(pred_np[:, 0], pred_np[:, 1], 'b-', label='IMU pred (endpoints)', linewidth=2.0, zorder=2)
+        ax.set_xlabel('X'); ax.set_ylabel('Y')
+        ax.set_title(f'Valid endpoints in {data_seq} epoch {epoch_i:04d}')
+        ax.grid(True); ax.axis('equal'); ax.legend()
+        os.makedirs(os.path.dirname(filename), exist_ok=True)
+        fig.savefig(filename, bbox_inches='tight')
+        plt.close(fig)
+    except Exception as e:
+        print(f"Warning: Error saving valid endpoint plot to {filename}: {e}")
         try:
             plt.close('all')
         except:
@@ -943,7 +981,7 @@ if __name__ == "__main__":
         train_packs.append((seq, ds, dl))
 
     valid_packs = []
-    for seq in args.valid_seqs:
+    for seq in (args.valid_seqs or []):
         ds = SeqDataset(data_root=args.data_root, data_seq=seq, data_type=args.data_type)
         dl = Data.DataLoader(dataset=ds,
                              batch_size=args.batch_size,
@@ -961,7 +999,9 @@ if __name__ == "__main__":
         print(f"Creating limited GMM dataset with train_ratio: {args.train_ratio}")
         gmm_train_packs = create_gmm_data_packs(train_packs, args.train_ratio)
 
-        gmm = GmmModule(gmm_train_packs, K=None, win_sec=0.2).fit()
+        # gmm_comp_num == 0 -> auto-pick K via BIC (K=None); otherwise fix K.
+        gmm_K = None if args.gmm_comp_num == 0 else args.gmm_comp_num
+        gmm = GmmModule(gmm_train_packs, K=gmm_K, win_sec=0.2).fit()
         gmm_initial = gmm
 
         _ = gmm.compute_component_weights(
@@ -1037,10 +1077,10 @@ if __name__ == "__main__":
             init_list(train_dataset)
 
             if args.use_submap:
-                lo_model = LOModule(lo_model=args.lo_model, T_I_L=train_dataset.T_I_G, R_I_L=train_dataset.R_I_L,
+                lo_model = LOModule(lo_model=args.lo_model, T_I_L=train_dataset.T_I_L, R_I_L=train_dataset.R_I_L,
                                     init_state=icp_poses_list[-1], device_id=args.device, use_submap=True)
             else:
-                lo_model = LOModule(lo_model=args.lo_model, T_I_L=train_dataset.T_I_G, R_I_L=train_dataset.R_I_L,
+                lo_model = LOModule(lo_model=args.lo_model, T_I_L=train_dataset.T_I_L, R_I_L=train_dataset.R_I_L,
                                     init_state=icp_poses_list[-1], device_id=args.device, use_submap=False)
             integrator = IMUIntegrator(init_state=train_dataset.init, device=args.device)
 
@@ -1074,7 +1114,7 @@ if __name__ == "__main__":
         monitor.log_epoch_summary(
             epoch=epoch_i,
             train_losses={'total_loss': epoch_train_loss / len(args.train_seqs)},
-            val_losses={'total_loss': epoch_valid_loss / len(args.valid_seqs)} if args.valid_seqs else None
+            val_losses={'total_loss': epoch_valid_loss / len(valid_packs)} if valid_packs else None
         )
 
         epoch_train_loss = 0
@@ -1093,31 +1133,36 @@ if __name__ == "__main__":
             print(f"  * Valid Loss: {valid_loss} *   ")
             ckpt_dir = save_ckpt(network=network, optimizer=optimizer, epoch_i=epoch_i,
                                  data_seq=valid_seq, save_best=False, valid_set=True)
-            icp_pose = np.stack([t.detach().cpu() for t in icp_poses_list])
-            pgo_pose = np.stack([t.detach().cpu() for t in pgo_poses_list])
-            gt_pose  = np.stack([t.detach().cpu() for t in gt_poses_list]) if gt_poses_list else np.array([])
-            plot_pose_trajs(icp_pose, pgo_pose, None, gt_pose,
-                            os.path.join(ckpt_dir, f"{epoch_i:04d}.png"),
-                            data_seq=valid_seq, epoch_i=epoch_i, train_set=False)
+            # Plot the IMU-predicted window endpoints against GT endpoints (what
+            # validate() actually computes), not the empty icp/pgo lists.
+            pred_pose = np.stack(valid_pred_last_list) if len(valid_pred_last_list) > 0 else np.array([])
+            gt_pose   = np.stack(valid_gt_last_list) if len(valid_gt_last_list) > 0 else np.array([])
+            plot_valid_endpoints(pred_pose, gt_pose,
+                                 os.path.join(ckpt_dir, f"{epoch_i:04d}.png"),
+                                 data_seq=valid_seq, epoch_i=epoch_i)
 
-            if len(gt_poses_list) > 1:
-                gt_poses_np  = np.stack([t.detach().cpu().numpy() for t in gt_poses_list])
-                pgo_poses_np = np.stack([t.detach().cpu().numpy() for t in pgo_poses_list])
-                icp_poses_np = np.stack([t.detach().cpu().numpy() for t in icp_poses_list])
+        n_valid = len(valid_packs)
+        if n_valid > 0:
+            print(f"  * Total Valid Loss in {epoch_i} epoch: {epoch_valid_loss / n_valid} *   ")
 
-        print(f"  * Total Valid Loss in {epoch_i} epoch: {epoch_valid_loss / len(args.valid_seqs)} *   ")
+            epoch_valid_loss = epoch_valid_loss / n_valid
+            if epoch_valid_loss < best_valid_loss:
+                best_valid_loss = epoch_valid_loss
+                ckpt_dir = save_ckpt(network=network, optimizer=optimizer, epoch_i=epoch_i,
+                                     save_best=True, train_set=False, valid_set=False)
+                print(f"  * Update Best Valid Loss: {best_valid_loss} *   ")
 
-        epoch_valid_loss = epoch_valid_loss / len(args.valid_seqs)
-        if epoch_valid_loss < best_valid_loss:
-            best_valid_loss = epoch_valid_loss
-            ckpt_dir = save_ckpt(network=network, optimizer=optimizer, epoch_i=epoch_i,
-                                 save_best=True, train_set=False, valid_set=False)
-            print(f"  * Update Best Valid Loss: {best_valid_loss} *   ")
-
-        if args.scheduler in ('CosineAnnealingLR', 'StepLR'):
-            scheduler.step()
+            if args.scheduler in ('CosineAnnealingLR', 'StepLR'):
+                scheduler.step()
+            else:
+                scheduler.step(epoch_valid_loss)
         else:
-            scheduler.step(epoch_valid_loss)
+            # No validation set: still advance epoch-based schedulers, and save
+            # the latest model as "best" so downstream eval/inference has a ckpt.
+            if args.scheduler in ('CosineAnnealingLR', 'StepLR'):
+                scheduler.step()
+            save_ckpt(network=network, optimizer=optimizer, epoch_i=epoch_i,
+                      save_best=True, train_set=False, valid_set=False)
 
         epoch_valid_loss = 0
 

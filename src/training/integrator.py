@@ -19,21 +19,23 @@ def prase_init(init=None, motion_mode=False, device='cuda:0'):
         init_rot = pp.identity_SO3().to(dtype).to(device)
         init_vel = torch.zeros(3, dtype=dtype).to(device)
 
-    if 'cov' not in init or init['cov'] is None:
+    if init is None or 'cov' not in init or init['cov'] is None:
         init_cov = torch.eye(9, dtype=torch.get_default_dtype(), device=device).unsqueeze(0) * 1e-10
     else:
         init_cov = init['cov']
 
-    return init_pos, init_rot, init_vel, init_cov 
+    return init_pos, init_rot, init_vel, init_cov
 
 class IMUIntegrator:
     def __init__(self, init_state=None, prop_cov=True, gravity=torch.tensor([0.0, 0.0, 9.81]), device='cuda:0'):
         self.device = device
-        init_pos, init_rot, init_vel, _ = prase_init(init_state, motion_mode=False)
+        init_pos, init_rot, init_vel, _ = prase_init(init_state, motion_mode=False, device=device)
         self.integrator = pp.module.IMUPreintegrator(init_pos, init_rot, init_vel,
                                                      prop_cov=prop_cov, reset=True, gravity=gravity).to(device)
     
-    def integrate(self, init, dts, accels, gyros, cov_accels=None, cov_gyros=None, motion_mode=False, device='cuda:0'):
+    def integrate(self, init, dts, accels, gyros, cov_accels=None, cov_gyros=None, motion_mode=False, device=None):
+        if device is None:
+            device = self.device
         init_pos, init_rot, init_vel, init_cov = prase_init(init, motion_mode, device)
 
         if motion_mode:

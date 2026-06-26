@@ -2,7 +2,7 @@
 # Train KISS-IMU (GMM + balance-aware + frequency gate).
 #
 # Edit the variables below or override them via environment, e.g.:
-#   DATA_TYPE=kitti DATA_DIR=/storage/KITTI bash scripts/train.sh
+#   DATA_TYPE=diter_os DATA_DIR=/storage/DiTer_os bash scripts/train.sh
 #
 # Set USE_GT=true to train against GT poses instead of the ICP/PGO pseudo-
 # label. ICP and PGO are then skipped entirely, so iterations are much
@@ -14,7 +14,7 @@ set -euo pipefail
 
 # ---- dataset selection -----------------------------------------------------
 DATA_DIR=${DATA_DIR:-/storage1/Datasets/kiss_imu_datasets/DiTer_os}
-DATA_TYPE=${DATA_TYPE:-diter_os}                   # mulran|yeoncheon|kitti|diter++|diter_os|...
+DATA_TYPE=${DATA_TYPE:-diter_os}                   # diter_os | diter++ (add your own in data/seq_dataset.py)
 TRAIN_SEQS=${TRAIN_SEQS:-"Forest_new"}
 VALID_SEQS=${VALID_SEQS:-"Forest_new"}
 LO_MODEL=${LO_MODEL:-kiss_icp}                     # kiss_icp|fast_gicp|small_gicp
@@ -62,7 +62,9 @@ fi
 mkdir -p "$RESULT_DIR"
 
 # ---- flag handling ---------------------------------------------------------
-[[ "$USE_VALIDATION" == "true" ]] && VALID_ARG="--valid-seqs ${valid_seqs_arr[@]}" || VALID_ARG="--valid-seqs"
+# When validation is off, omit --valid-seqs entirely (argparse nargs='+'
+# rejects the flag with no values), rather than passing an empty flag.
+[[ "$USE_VALIDATION" == "true" ]] && VALID_ARG="--valid-seqs ${valid_seqs_arr[@]}" || VALID_ARG=""
 [[ "$USE_SUBMAP"    == "true" ]] && SUBMAP_ARG="--use-submap" || SUBMAP_ARG="--no-submap"
 [[ "$USE_GT"        == "true" ]] && USE_GT_ARG="--use-gt"     || USE_GT_ARG=""
 

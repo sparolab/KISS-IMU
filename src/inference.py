@@ -31,7 +31,8 @@ import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 
-from data.eval_dataset import SeqDataset, collate_fn
+from data.seq_dataset import SeqDataset
+from data.collate import collate_fn
 from training.integrator import IMUIntegrator
 from models.imu_net import IMUNet
 from models.lo_module import LOModule
@@ -82,7 +83,7 @@ def run_sequence(seq: str, network: IMUNet, args) -> dict:
     init_pose7 = torch.from_numpy(np.concatenate([init_pos, init_rot])).float()
 
     lo_model = LOModule(lo_model=args.lo_model,
-                        T_I_L=ds.T_I_G, R_I_L=ds.R_I_L,
+                        T_I_L=ds.T_I_L, R_I_L=ds.R_I_L,
                         init_state=init_pose7,
                         device_id=args.device,
                         use_submap=args.use_submap)
@@ -151,7 +152,10 @@ def run_sequence(seq: str, network: IMUNet, args) -> dict:
         imu_poses_all.append(imu_nodes.tensor()[1:].detach().cpu().numpy())
         icp_poses_all.append(icp_poses.tensor()[1:].detach().cpu().numpy())
         pgo_poses_all.append(pgo_poses.tensor()[1:].detach().cpu().numpy())
-        gt_poses_all.append(sample['gt_pose1'][1:].detach().cpu().numpy())
+        # gt_pose1 is one endpoint per window (B rows), with no prepended anchor
+        # node — unlike imu/icp/pgo whose [1:] strips the anchor. Keep all B rows
+        # so every stream has the same length.
+        gt_poses_all.append(sample['gt_pose1'].detach().cpu().numpy())
         icp_overlap_all.append(np.asarray(icp_overlap))
         pgo_overlap_all.append(np.asarray(pgo_overlap))
 

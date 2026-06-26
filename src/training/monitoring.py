@@ -76,8 +76,8 @@ class TrainingMonitor:
         self.writer = SummaryWriter(
             log_dir=str(self.log_dir),
             comment=experiment_name,
-            flush_secs=1,  # 1초마다 자동 flush
-            max_queue=100  # 큐 크기 증가
+            flush_secs=1,  # auto-flush every 1 second
+            max_queue=100  # larger queue size
         )
         
         # Track metrics
@@ -243,7 +243,7 @@ class TrainingMonitor:
         pred_xyz = pred_poses[:, :3]
         aligned_pred = self._align_trajectories(pred_xyz, gt_xyz)
 
-        # x, y min/max 계산
+        # compute x, y min/max
         all_x = np.concatenate([gt_xyz[:, 0], aligned_pred[:, 0]])
         all_y = np.concatenate([gt_xyz[:, 1], aligned_pred[:, 1]])
         x_min, x_max = np.min(all_x), np.max(all_x)
@@ -258,7 +258,7 @@ class TrainingMonitor:
         ax.set_ylabel('Y')
         ax.set_title(name)
         ax.axis('equal')
-        # 정사각형 범위로 맞추기
+        # fit to a square range
         ax.set_xlim(x_min - 50, x_max + 50)
         ax.set_ylim(y_min - 50, y_max + 50)
 
@@ -900,7 +900,7 @@ class TrainingMonitor:
         pred_xyz = pred_poses[:, :3]
         aligned_pred = self._align_trajectories(pred_xyz, gt_xyz)
 
-        # x, y min/max 계산
+        # compute x, y min/max
         all_x = np.concatenate([gt_xyz[:, 0], aligned_pred[:, 0]])
         all_y = np.concatenate([gt_xyz[:, 1], aligned_pred[:, 1]])
         x_min, x_max = np.min(all_x), np.max(all_x)
@@ -915,7 +915,7 @@ class TrainingMonitor:
         ax.set_ylabel('Y')
         ax.set_title(name)
         ax.axis('equal')
-        # 정사각형 범위로 맞추기
+        # fit to a square range
         ax.set_xlim(x_min - 50, x_max + 50)
         ax.set_ylim(y_min - 50, y_max + 50)
 

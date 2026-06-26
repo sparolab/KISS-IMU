@@ -27,6 +27,7 @@
 ---
 
 ## 📰 News
+- 🥇 **Jun 2, 2026.** Jiwon Choi won the **IEEE-RAS Outstanding WiRA (Women in Robotics & Automation) Student Paper Award** at ICRA 2026.
 - 🏆 **May 6, 2026.** Selected as an **IEEE ICRA 2026 Award Finalist**.
 - 🎉 **Jan 31, 2026.** Accepted to **IEEE ICRA 2026**.
 
@@ -80,7 +81,7 @@ One top-level `data_root` with one sub-directory per sequence:
         └── 📄 timestamps.txt
 ```
 
-The loader handles dataset-specific column indices and coordinate transforms once `--data-type` is set (`kitti`, `mulran`, `diter_os`, …). See [examples/dataset_layout.md](examples/dataset_layout.md) for custom formats.
+The loader handles dataset-specific column indices and coordinate transforms once `--data-type` is set (`diter_os` is the reference dataset). See [examples/dataset_layout.md](examples/dataset_layout.md) for how to add your own.
 
 ## 🏋️ Training
 
@@ -93,12 +94,13 @@ Hyperparameters live as env vars at the top of [`scripts/train.sh`](scripts/trai
 | Variable        | Notes |
 | --------------- | ----- |
 | `DATA_DIR`      | Root directory of your dataset |
-| `DATA_TYPE`     | `diter_os` \| `kitti` \| `mulran` \| ... |
+| `DATA_TYPE`     | `diter_os` (reference) \| `diter++` \| add your own in `data/seq_dataset.py` |
 | `TRAIN_SEQS` / `VALID_SEQS` | Sequence names under `DATA_DIR` |
 | `LO_MODEL`      | `kiss_icp` \| `fast_gicp` \| `small_gicp` |
 | `GMM_COMP_NUM`  | `0` = auto-pick K via BIC, otherwise fixed K |
 | `USE_GT`        | GT pose supervision (ablation only, no ICP/PGO) |
 | `USE_SUBMAP`    | Aggregate scans into a sub-map for `small_gicp` |
+| `USE_VALIDATION`| `true` runs validation each epoch; `false` skips it and saves the latest checkpoint as best |
 | `TRAIN_RATIO`   | Fraction of training windows used |
 
 ### Ablations
@@ -126,8 +128,9 @@ CKPT=results/.../best_model.ckpt \
 ```
 
 Reports per-window endpoint RPE (translation, rotation) and end-point
-APE, averaged per sequence. Run `bash scripts/evaluate.sh --help` for
-all options.
+APE, averaged per sequence. Tunable env vars: `DATA_DIR`, `DATA_TYPE`,
+`EVAL_SEQS`, `DEVICE`, `WINDOW` (sliding-window size), `RESULT_DIR`.
+Run `python3 src/evaluate.py --help` for the full argument list.
 
 ## 🛰️ Inference
 

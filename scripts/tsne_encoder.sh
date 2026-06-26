@@ -7,8 +7,8 @@
 #
 # Override via env vars:
 #   CKPT=...          (required if not the default)
-#   DATA_TYPE=kitti   DATA_DIR=/storage/KITTI
-#   TRAIN_SEQS="07"   EVAL_SEQS="07"
+#   DATA_TYPE=diter_os   DATA_DIR=/storage/DiTer_os
+#   TRAIN_SEQS="Forest_new"   EVAL_SEQS="Park_in_day"
 #   bash scripts/tsne_encoder.sh
 set -euo pipefail
 

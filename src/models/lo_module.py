@@ -41,7 +41,7 @@ from utils.overlap_score import calc_symmetric_overlap
 def pose7_to_mat44(pose7):
     t = pose7[:3]
     q = pose7[3:]
-    # float64로 유지 (E)
+    # keep float64 (E)
     q = np.array(q, dtype=np.float64)
     q = q / np.linalg.norm(q)
     Rm = Rotation.from_quat(q).as_matrix()
@@ -60,7 +60,7 @@ def remove_nan_inf(pts):
     return pts[mask]
 
 def _apply_T_left(pts, T):
-    """pts는 (N,3). 반환은 pts.dtype 유지."""
+    """pts is (N,3). The return keeps pts.dtype."""
     if pts.size == 0:
         return pts
     homo = np.concatenate([pts, np.ones((pts.shape[0], 1), dtype=pts.dtype)], axis=1)
@@ -68,7 +68,7 @@ def _apply_T_left(pts, T):
     return out.astype(pts.dtype, copy=False)
 
 def _voxel_downsample_np(pts, voxel):
-    """결정적 다운샘플(A): unique+정렬, 랜덤 없음."""
+    """Deterministic downsample (A): unique + sort, no randomness."""
     if pts.size == 0 or voxel <= 0:
         return pts
     grid = np.floor(pts / voxel).astype(np.int64)
@@ -201,7 +201,7 @@ def icp_and_overlap_worker(args):
     )
     curr_homo = np.concatenate([curr_trans, np.ones((curr_trans.shape[0], 1), dtype=curr_trans.dtype)], axis=1)
     curr_in_prev = (T_ICP_Relative @ curr_homo.T).T[:, :3]
-    overlap = calc_symmetric_overlap(prev_trans, curr_in_prev)  # B는 submap 경로에서만 바꿈
+    overlap = calc_symmetric_overlap(prev_trans, curr_in_prev)  # B is only swapped in the submap path
     return T_ICP_Relative, curr_trans, prev_trans, overlap, curr_down, prev_down
 
 
@@ -309,7 +309,7 @@ class LOModule(nn.Module):
 
                 if building_submap_this_batch:
                     prev_in_curr = _apply_T_left(prev_trans, T_rel_inv)
-                    curr_ds = _voxel_downsample_np(curr_trans, self.submap_voxel)  # curr만 voxel
+                    curr_ds = _voxel_downsample_np(curr_trans, self.submap_voxel)  # voxelize curr only
                     if submap_local is None:
                         submap_local = np.vstack([prev_in_curr, curr_ds])
                     else:

@@ -1,52 +1,66 @@
 # Example: laying out a dataset for KISS-IMU
 
-Suppose you have a KITTI-style sequence `07` and a DiTer-OS sequence
-`Forest_new`. Place them under one shared `data_root`:
+`diter_os` is the reference dataset. Place each sequence under one shared
+`data_root`:
 
 ```
-/storage1/For_IMUNet/
-├── KITTI/
-│   ├── 07/
-│   │   ├── imu.csv
-│   │   ├── gt_pose.csv          # 12-col SE(3), KITTI style
-│   │   └── points/
-│   │       ├── data/000000.bin … 004540.bin
-│   │       └── timestamps.txt
-│   └── 08/ …
-└── DiTer_os/
-    ├── Forest_new/
-    │   ├── imu.csv
-    │   ├── gt_pose.csv          # 7-col x,y,z,qx,qy,qz,qw
-    │   └── points/
-    │       ├── data/000000.bin … 012043.bin
-    │       └── timestamps.txt
-    ├── Lawn_lower_night/ …
-    └── Park_in_day/ …
+/storage1/Datasets/kiss_imu_datasets/DiTer_os/
+├── Forest_new/
+│   ├── imu.csv
+│   ├── gt_pose.csv          # 8-col: timestamp + x,y,z,qx,qy,qz,qw
+│   └── points/
+│       ├── data/<timestamp>.bin …   # any names; sorted lexically
+│       └── timestamps.txt
+├── Lawn_lower_night/ …
+└── Park_in_day/ …
 ```
 
-You then point `--data-root` at the appropriate parent and select
-`--data-type` per dataset:
+Point `--data-root` at the parent and select `--data-type`:
 
 ```bash
-DATA_DIR=/storage1/For_IMUNet/KITTI    DATA_TYPE=kitti       TRAIN_SEQS="07"          bash scripts/train.sh
-DATA_DIR=/storage1/For_IMUNet/DiTer_os DATA_TYPE=diter_os    TRAIN_SEQS="Forest_new"  bash scripts/train.sh
+DATA_DIR=/storage1/Datasets/kiss_imu_datasets/DiTer_os DATA_TYPE=diter_os TRAIN_SEQS="Forest_new" bash scripts/train.sh
 ```
 
-## Inspecting `imu.csv`
+The `.bin` files can be named anything (sequential numbers or nanosecond
+timestamps) — `load_scan` just sorts them lexically and zips them with
+`timestamps.txt` line-by-line, so the sort order and the timestamp order
+must agree.
 
-The first column must be a **monotonic timestamp in seconds**
-(`float64`). The accelerometer / gyroscope columns are picked by
-column index, not by name. Look at
-[`src/data/seq_dataset.py`](../src/data/seq_dataset.py) for the
-exact `acc_idx`/`gyr_idx` per `--data-type`. If your CSV has headers,
-either strip them or load with `pandas.read_csv(..., header=None,
-skiprows=1)` in a custom subclass.
+## Adding your own dataset
+
+Each `--data-type` maps to one branch in `SeqDataset.__init__`
+([`src/data/seq_dataset.py`](../src/data/seq_dataset.py)) that sets the
+LiDAR dtype, the IMU column indices, and the extrinsics. To onboard a new
+dataset, add a branch (or edit the generic `else` fallback) with:
+
+- **`lidar_dtype`** — only change it if your `.bin` layout differs from the
+  default `(x, y, z, intensity)` float64 structured array.
+- **`acc_idx` / `gyr_idx`** — the column offsets of the accel/gyro triplets
+  in your `imu.csv`.
+- **`R_I_L` / `R_I_G`** — your IMU↔LiDAR and IMU↔global extrinsic rotations.
+
+## `imu.csv`
+
+The first column must be a **monotonic timestamp in seconds** (`float64`).
+The accelerometer / gyroscope columns are picked by index (`acc_idx`,
+`gyr_idx`), not by name. If your CSV has headers, strip them or load with
+`pandas.read_csv(..., header=None, skiprows=1)` in a custom subclass.
+
+## `gt_pose.csv`
+
+The first column is the timestamp; the rest is the pose. Two pose formats
+are supported:
+
+- **7-col quaternion** — `x, y, z, qx, qy, qz, qw` (8 columns total with
+  the leading timestamp).
+- **SE(3) row-major** — the 9 rotation + 3 translation entries, i.e. a
+  12-col pose (13 columns total with the leading timestamp).
 
 ## `points/data/*.bin`
 
-Each `.bin` is a **packed numpy structured array** matching
-`lidar_dtype` (per `--data-type`). For example,
-`diter_os` uses
+Each `.bin` is a **packed numpy structured array** matching `lidar_dtype`.
+The default (`diter_os` and the generic fallback) is a 4-field float64
+dtype:
 
 ```python
 np.dtype([('x', '<f8'), ('y', '<f8'), ('z', '<f8'), ('intensity', '<f8')])
@@ -56,12 +70,11 @@ and the loader does
 
 ```python
 scan = np.fromfile(path, dtype=lidar_dtype)
-points = np.stack([scan['x'], scan['y'], scan['z']], axis=-1)
+points = np.vstack((scan['x'], scan['y'], scan['z'])).T   # (N, 3)
 ```
 
-If your scans are stored as float32 `(x, y, z, intensity)` (KITTI
-convention), use `--data-type kitti`. If they are flat `(N, 4)` float
-arrays of a custom dtype, write a subclass and override `load_scan`.
+If your scans use a different layout, set `lidar_dtype` accordingly in your
+`--data-type` branch, or write a subclass and override `load_scan`.
 
 ## `timestamps.txt`
 
@@ -73,7 +86,7 @@ files (otherwise the loader trims to `min(len)`).
 
 ```python
 from data.seq_dataset import SeqDataset
-ds = SeqDataset('/storage1/For_IMUNet/DiTer_os', 'Forest_new', 'diter_os')
+ds = SeqDataset('/storage1/Datasets/kiss_imu_datasets/DiTer_os', 'Forest_new', 'diter_os')
 print(len(ds), ds[0].keys())
 ```
 
