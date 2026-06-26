@@ -27,7 +27,7 @@
 ---
 
 ## 📰 News
-- 🥇 **Jun 2, 2026.** Jun 2, 2026. Received the **IEEE-RAS Outstanding WiRA Student Paper Award at ICRA 2026**.
+- 🥇 **Jun 2, 2026.** Received the **IEEE-RAS Outstanding WiRA Student Paper Award at ICRA 2026**.
 - 🏆 **May 6, 2026.** Selected as an **IEEE ICRA 2026 Award Finalist**.
 - 🎉 **Jan 31, 2026.** Accepted to **IEEE ICRA 2026**.
 
