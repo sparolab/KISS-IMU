@@ -150,7 +150,7 @@ def main():
             title.set_text('4  Balanced regimes drive the denoiser training')
             subt.set_text('+ frequency gate, rare-regime boost, per-regime convergence; then online PGO with the corrected IMU')
             if hist and axB2 is None:
-                axB2 = fig.add_axes([0.70, 0.52, 0.24, 0.27]); axB2.set_facecolor(BG)
+                axB2 = fig.add_axes([0.30, 0.53, 0.17, 0.26]); axB2.set_facecolor(BG)
                 for s in axB2.spines.values():
                     s.set_color(GRID)
                 axB2.tick_params(colors=MUTED, labelsize=7)
