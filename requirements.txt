@@ -1,28 +1,10 @@
-# KISS-IMU runtime requirements.
-# These are already preinstalled in the official Docker image
-# (sparolab/kiss-imu:v1.0). List them here for reference and
-# for users who want to run outside the container.
-
-# core
-numpy
-pandas
+# KISS-IMU (updated, branch main) runtime requirements.
+# All of them are preinstalled in the Docker image sparolab/kiss-imu:v1.0.
+numpy<2
 scipy
-scikit-learn
-matplotlib
-tqdm
 pyyaml
-
-# DL
+scikit-learn      # GMM motion balancing
 torch>=1.13
-torchvision
-pypose>=0.6
-tensorboard
-
-# point clouds / LiDAR odometry
-open3d
-small_gicp
-pygicp
-kiss-icp
-
-# misc
-opencv-python
+small_gicp>=1.0   # LiDAR odometry (GICP scan-to-submap)
+matplotlib        # figures (tools/make_gif.py, tools/make_gmm_gif.py)
+# optional: rerun-sdk  (live visualisation, scripts/run_pgo.py --rerun)

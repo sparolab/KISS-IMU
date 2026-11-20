@@ -46,3 +46,6 @@ Thumbs.db
 storage/
 storage1/
 datasets/
+
+# Released checkpoints
+!checkpoints/**/*.pt

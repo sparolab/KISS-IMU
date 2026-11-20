@@ -1,0 +1,47 @@
+# Denoiser training on the warm-up (scripts/run_warmstart.py injects the truncated sequence and its LO
+# pseudo-labels; no data.train / val, no GT).
+#   model     CNN + GRU encoder, denoising head correcting gyro and accelerometer (residual on the raw samples)
+#   loss      multi-horizon preintegration loss over 0.5-10 s, every label pair weighted by how much more the label
+#             can be trusted than the raw IMU over that pair (GT-free noise fit, kiss_imu/training/horizon.py)
+#   reweight  KISS-IMU motion balancing: GMM over (|gravity-free acc|, |gyr|) per label pair, effective-number
+#             class weights, frequency gate, rare-component boost, per-component convergence
+#             (kiss_imu/training/reweight.py)
+data: {train: [], val: []}          # filled by scripts/run_warmstart.py (the warm-up of the running sequence)
+window:
+  segment_s: 0.1
+  segments: 10
+  hop_segments: 5
+model:
+  encoder: cnn_gru
+  encoder_args: {conv_ch: [32, 64], kernel: 5, stride: 5, hidden: 128}
+  heads: [denoising]
+  head_args:
+    denoising: {hidden: 64, targets: [gyr, acc]}
+loss:
+  mode: horizon
+  scale: {rot: 0.002, vel: 0.02, pos: 0.002}
+  weight: {rot: 1.0, vel: 1.0, pos: 0.0}
+  horizon: {weighting: cov, horizons: [0.5, 1.0, 2.0, 5.0, 10.0], window_s: 10.0, hop_s: 1.0, start_stride_s: 0.5,
+            batch_size: 4}
+train:
+  epochs: 60
+  batch_size: 64
+  lr: 1.0e-3
+  weight_decay: 1.0e-4
+  workers: 0
+  seed: 0
+  vel_horizon_s: 5.0
+  select: segment
+reweight:
+  enabled: true
+  mode: balance
+  features: norm
+  win_s: 0.2
+  k_range: [2, 5]                # GMM components picked by BIC
+  method: effective
+  beta: 0.999
+  clamp: [0.1, 10.0]
+  class_weight: true
+  freq_gate: {enabled: true, alpha: 0.7, p_min: 0.15, p_max: 1.0, prior: 10.0, ema: 0.99}
+  rare_boost: {enabled: true, weight: 0.3, topk: 0.25}
+  convergence: {enabled: true, unit: epoch, ema: 0.5, rel_tol: 1.0e-3, patience: 5, min_seen: 100}

@@ -1,0 +1,9 @@
+# DiTer_os: IMU ~100 Hz, GT ~10 Hz; GT body taken as the IMU frame (profile diter_os)
+data:
+  root: /storage1/DiTer_os
+  type: diter_os
+  train: [Park_in_day]
+  val: [Lawn_lower_night]
+  test: [Forest_new]
+  # GT clock offsets (evaluation only), from cross-correlating |gyro rate| with the GT rate
+  gt_time_offset: {Park_in_day: -0.279, Lawn_lower_night: 0.055, Forest_new: -0.290}

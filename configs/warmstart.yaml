@@ -1,0 +1,19 @@
+# Warm-start self-supervision (scripts/run_warmstart.py): raw-IMU PGO for the first warmup_s seconds, train the
+# denoiser on that stretch's LO pseudo-labels (KISS-IMU GMM motion balancing, ICP-vs-PGO overlap label vote),
+# hand the running PGO over to the corrected IMU, continue to the end. No GT anywhere (evaluation only).
+base: pgo.yaml
+warmstart:
+  warmup_s: 30.0                 # seconds of the run used for training (from the first scan)
+  latency: measured              # hand-over delay after warmup_s: measured (training wall time) | <seconds>
+  labels: {source: lo, min_eig_frac: 0.05}       # LO poses; invalid = rejected or Hessian min eig < 5 % of median
+  train_config: configs/train_warmstart.yaml      # relative to this file or to the repository root
+  train_overrides: []            # dotted overrides for the training config, e.g. [train.epochs=30]
+  checkpoint: last               # last | best (no GT to select on: best = lowest training loss)
+  # label rounds: after each training, re-run the PGO over the warm-up with the corrected IMU and re-pick each
+  # scan pair's label among {current, re-run LO, re-run PGO} by point-cloud overlap, then retrain (from scratch)
+  label_rounds: 2
+  label_init: scratch            # scratch | continue (fine-tune the previous round's model)
+  label_select: {mode: overlap, thr: 0.2, voxel: 0.2, margin: 0.002}
+  corrected_noise: null          # {gyr, acc} densities for the corrected stream (null: keep io.*_noise)
+  bias_jump: true                # shift the PGO biases by the mean correction at the hand-over
+  bias_rw_scale: 1.0             # bias random walk x this after the hand-over

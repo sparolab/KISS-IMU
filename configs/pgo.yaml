@@ -1,0 +1,61 @@
+# Sliding-window LiDAR-inertial PGO (kiss_imu/pgo): one node per scan, small_gicp scan-to-submap LO + IMU
+# preintegration with bias states, LM over the window, the oldest node marginalised.
+# Dataset configs (configs/<dataset>/pgo.yaml) put their `data:` block on top of this file.
+data:
+  root: /storage1/<DATASET>          # one sub-directory per sequence (README: Dataset Layout)
+  type: generic                      # kiss_imu/data/profiles.py: column layout and extrinsics
+  min_range: 1.0
+  max_range: 100.0
+  gt_time_offset: {}                 # per sequence, s added to the GT stamps (evaluation only)
+
+io:
+  mode: raw                     # raw | corrected (needs checkpoint)
+  checkpoint: null
+  hop: null                     # corrected: samples kept per model window (default: segment length K)
+  gyr_noise: 2.0e-3             # rad/s/sqrt(Hz)
+  acc_noise: 2.0e-2             # m/s^2/sqrt(Hz)
+  gyr_bias_rw: 1.0e-5           # rad/s^2/sqrt(Hz)
+  acc_bias_rw: 1.0e-4           # m/s^3/sqrt(Hz)
+  cov_scale: 1.0
+  corrected_noise: null         # e.g. {gyr: 1.0e-3, acc: 1.0e-2} for the corrected stream
+  # per-sample variance from the stream's own first differences over win_s (vibration / impacts)
+  sample_var: {enabled: true, sensors: [gyr, acc], win_s: 0.1, order: 1}
+
+lo:
+  registration:
+    name: small_gicp
+    registration_type: GICP
+    source_voxel: 0.5
+    target_voxel: 0.5
+    num_neighbors: 10
+    max_correspondence_distance: 1.0
+    max_iterations: 30
+    num_threads: 8
+  map:
+    name: keyframe_submap       # keyframe_submap | voxel_hash
+    voxel: 0.5
+    max_keyframes: 30
+  keyframe: {distance: 1.0, angle_deg: 10.0}
+  insert: newest                # newest | marginalized
+  # LO information = GICP Hessian / residual variance per inlier dof, times one fixed scale
+  # (weakly constrained directions get little weight); or {mode: fixed, rot_sigma, pos_sigma}
+  info: {mode: hessian, normalize: residual, scale: 0.005, rot_sigma_max: 1.0, pos_sigma_max: 10.0}
+  gate: {min_inlier_ratio: 0.3, max_jump_m: 1.0, max_jump_deg: 10.0, require_converged: false}
+  huber: 3.0
+
+graph:
+  window: 10
+  iters: 6
+  lm_lambda: 1.0e-4
+
+init:
+  prior_sigmas: [0.05, 1.0e-3, 0.5, 1.0e-3, 1.0e-2]   # rot, pos, vel, bg, ba
+
+run:
+  init: static                  # GT-free start: gravity and gyro bias from the first init_window_s (platform still)
+  init_window_s: 1.0
+  start_scan: 0
+  max_scans: null
+
+log:
+  lo_pose: true                 # log every scan's LO pose + information (the warm-start pseudo-labels)
