@@ -1,11 +1,14 @@
-"""Compact animation of one online KISS-IMU run: the map being built on the left, the step on the right, and
-running numbers below the step.
+"""Story of one online KISS-IMU run in one animation (map on the left, the step on the right):
 
-    1. Data selection    - the first warmup_s seconds on the raw IMU; their LiDAR odometry poses are the labels
-    2. Motion regimes    - a GMM over the sliding-window motion features of those seconds
-    3. Reweighting       - per-regime share of the training signal, raw -> motion-balanced
-    4. Training          - the denoiser's training loss
-    5. Learned IO -> PGO - the IMU flows through the network into the running PGO; the map is built to the end
+    1. Collect   - the first warmup_s seconds on the raw IMU: every 0.2 s IMU window leaves the robot's path
+                   and lands in the motion-feature plane (|gravity-free acc|, |gyro|)
+    2. Group     - a GMM (K by BIC) splits the plane into motion regimes; the path takes their colours
+    3. Balance   - each regime becomes a bubble sized by its share of the training signal, then resized by
+                   the effective-number weights (rare motion grows)
+    4. Learn     - the balanced regimes stream into the denoiser
+    5. Run       - the running PGO takes the denoised IMU (learned IO); the map is built to the end
+    6. Denoised  - gyro-only dead reckoning (60 s, LiDAR speed) from a few points of the run: raw vs denoised,
+                   and the IMU-only attitude drift
 
 Best with a run whose hand-over is at warmup_s (a released checkpoint replayed without training):
 
@@ -28,17 +31,19 @@ import matplotlib.pyplot as plt  # noqa: E402
 import numpy as np  # noqa: E402
 from matplotlib import font_manager  # noqa: E402
 from matplotlib.animation import FuncAnimation, PillowWriter  # noqa: E402
+from matplotlib.collections import LineCollection  # noqa: E402
 from matplotlib.colors import to_rgba  # noqa: E402
-from matplotlib.patches import Ellipse, FancyBboxPatch  # noqa: E402
-from scipy.spatial.transform import Rotation  # noqa: E402
+from matplotlib.patches import Ellipse, FancyArrowPatch, FancyBboxPatch, Wedge  # noqa: E402
+from scipy.spatial.transform import Rotation, Slerp  # noqa: E402
 
 from kiss_imu.config import load_config  # noqa: E402
 from kiss_imu.data import Sequence  # noqa: E402
+from kiss_imu.eval.drift import integrate_gyro  # noqa: E402
 from kiss_imu.training.reweight import MotionGMM, features_fn  # noqa: E402
 
-BG, FG, MUTED, LIGHT, MAPC = '#ffffff', '#1f2328', '#59636e', '#d0d7de', '#aab3bd'
-C_RAW, C_LRN, C_SEL, C_LOSS = '#3F51B5', '#00897B', '#D81B60', '#F57C00'
-PAL = ['#3F51B5', '#00897B', '#F57C00', '#D81B60', '#8f7ce8', '#6cc24a']
+BG, FG, MUTED, LIGHT, MAPC = '#ffffff', '#1f2328', '#59636e', '#d0d7de', '#b4bcc5'
+C_RAW, C_LRN, C_SEL, C_NET = '#D81B60', '#00897B', '#D81B60', '#3F51B5'
+PAL = ['#3F51B5', '#00897B', '#F57C00', '#8E24AA', '#43A047', '#6D4C41']
 
 
 def ease(x):
@@ -54,13 +59,36 @@ def use_font():
     plt.rcParams['font.family'] = 'Inter' if 'Inter' in names else 'DejaVu Sans'
 
 
+def corrected_gyro(ckpt, seq):
+    from kiss_imu.models import load_model
+    from kiss_imu.pgo.modules.io_module import causal_correction
+    m, ck = load_model(ckpt, 'cpu')
+    return causal_correction(m, seq.gyr, seq.acc, ck['window']['L'], ck['window']['K'], 'cpu')[0]
+
+
+def dead_reckon(seq, gyr, ref, t0, H):
+    """Gyro-only dead reckoning: the attitude from integrating gyr from the reference attitude at t0, the
+    body-frame velocity from the reference (LiDAR PGO) trajectory. Returns reference and dead-reckoned xy."""
+    ts, P, sl = ref
+    k = (seq.imu_t >= t0) & (seq.imu_t <= t0 + H)
+    t = seq.imu_t[k][::2]
+    Rr = sl(t)
+    p = np.stack([np.interp(t, ts, P[:, i]) for i in range(3)], 1)
+    vb = Rr.inv().apply(np.gradient(p, t, axis=0))
+    Re = Rr[0].as_matrix() @ integrate_gyro(t, gyr[k][::2])
+    pe = p[0] + np.cumsum(np.einsum('nij,nj->ni', Re, vb) * np.r_[np.diff(t), 0][:, None], 0)
+    return t - t0, p[:, :2], pe[:, :2]
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('config'); ap.add_argument('seq'); ap.add_argument('run')
-    ap.add_argument('--train', help="dir with history.json (default: the run's last train* dir)")
+    ap.add_argument('--train', required=True, help='dir with the checkpoint (*.pt) and history.json')
     ap.add_argument('--raw', help='raw-IMU run dir (result.json) for the ATE line')
     ap.add_argument('--out', default='fig/kiss_imu_online.gif')
     ap.add_argument('--fps', type=int, default=15)
+    ap.add_argument('--dr-starts', type=float, nargs='+', default=[120.0, 200.0, 300.0])
+    ap.add_argument('--dr-horizon', type=float, default=60.0)
     ap.add_argument('--map-every', type=int, default=3)
     ap.add_argument('--points', type=int, default=900)
     ap.add_argument('--zmax', type=float, default=3.0)
@@ -71,20 +99,27 @@ def main():
     d, w = cfg['data'], cfg['warmstart']
     tpath = w['train_config'] if os.path.exists(w['train_config']) else os.path.join(os.path.dirname(a.config), w['train_config'])
     rw = load_config(tpath).get('reweight', {})
+    win_s = rw.get('win_s', 0.2)
     seq = Sequence(d['root'], a.seq, d.get('type', 'generic'), 0.0, min_range=d.get('min_range', 1.0),
                    max_range=d.get('max_range', 100.0), scan_time_offset=d.get('scan_time_offset', 0.0),
                    lidar_rotvec_deg=d.get('lidar_rotvec_deg'))
     on = np.loadtxt(os.path.join(a.run, 'online.txt'))
-    t, P, Rq = on[:, 0], on[:, 1:4] - on[0, 1:4], Rotation.from_quat(on[:, 4:8])
+    t, Pw, Rq = on[:, 0], on[:, 1:4], Rotation.from_quat(on[:, 4:8])
     t0 = t[0]
+    origin = Pw[0].copy()
+    P = Pw - origin
     W = float(w['warmup_s'])
-    T = t[-1] - t0
+    tt = t - t0
+    T = tt[-1]
     res = json.load(open(os.path.join(a.run, 'result.json')))
     drift = res.get('imu_drift_after_switch', {})
-    att_raw = drift.get('raw', {}).get('att_deg', {}).get('60.0')
-    att_lrn = drift.get('used', {}).get('att_deg', {}).get('60.0')
+    att_raw = drift.get('raw', {}).get('att_deg', {}).get('60.0', np.nan)
+    att_lrn = drift.get('used', {}).get('att_deg', {}).get('60.0', np.nan)
     ate_lrn = res['online']['ate_aligned_rmse']
     ate_raw = json.load(open(os.path.join(a.raw, 'result.json')))['online']['ate_aligned_rmse'] if a.raw else None
+    ckpt = sorted(glob.glob(os.path.join(a.train, '*.pt')))[0]
+    hp = os.path.join(a.train, 'history.json')
+    L = np.array([h['train_loss'] for h in json.load(open(hp))]) if os.path.exists(hp) else np.ones(2)
 
     # map points
     k_scan = np.searchsorted(seq.scan_t, t).clip(0, len(seq.scan_t) - 1)
@@ -94,240 +129,370 @@ def main():
         x = seq.scan(k_scan[i])
         x = x[rng.choice(len(x), min(a.points, len(x)), replace=False)]
         x = x[x[:, 2] < a.zmax]
-        mp.append(Rq[i].apply(x) + P[i]); mt.append(np.full(len(x), t[i] - t0))
-    mp, mt = np.concatenate(mp), np.concatenate(mt)
-    tt = t - t0
+        mp.append(Rq[i].apply(x) + P[i]); mt.append(np.full(len(x), tt[i]))
+    mp, mt = np.concatenate(mp)[:, :2], np.concatenate(mt)
 
     # motion features + GMM of the warm-up (as the trainer)
     m = (seq.imu_t >= t0) & (seq.imu_t <= t0 + W)
-    F = features_fn(rw)(seq.imu_t, seq.gyr, seq.acc, rw.get('win_s', 0.2))[m]
+    F = features_fn(rw)(seq.imu_t, seq.gyr, seq.acc, win_s)[m]
     ti = seq.imu_t[m] - t0
-    gm = MotionGMM(rw.get('n_components'), tuple(rw.get('k_range', (2, 5))), rw.get('win_s', 0.2),
+    gm = MotionGMM(rw.get('n_components'), tuple(rw.get('k_range', (2, 5))), win_s,
                    rw.get('method', 'effective'), rw.get('beta', 0.999), tuple(rw.get('clamp', (0.1, 10.0))),
                    seed=rw.get('seed', 0)).fit([F])
     Pr = gm.proba(F)
     mu = gm.scaler.inverse_transform(gm.gmm.means_)
-    order = np.argsort(mu[:, 1] + 0.05 * mu[:, 0])
+    order = np.argsort(mu[:, 1] + 0.05 * mu[:, 0])                    # calm -> fast turns
     rank = np.empty_like(order); rank[order] = np.arange(gm.K)
     comp = rank[Pr.argmax(1)]
+    K = gm.K
     counts = Pr.sum(0)[order]
     cw = np.clip(gm.component_weights(Pr.sum(0)), *gm.clamp)[order]
     s_raw, s_bal = counts / counts.sum(), counts * cw / (counts * cw).sum()
     rare = int(np.argmin(s_raw))
-    tdir = a.train
-    if tdir is None:
-        tdirs = sorted(x for x in os.listdir(a.run) if x.startswith('train'))
-        tdir = os.path.join(a.run, tdirs[-1]) if tdirs else None
-    hp = os.path.join(tdir, 'history.json') if tdir else ''
-    L = np.array([h['train_loss'] for h in json.load(open(hp))]) if os.path.exists(hp) else np.ones(2)
+    mu_o = mu[order]
+    names = ['calm'] * K
+    names[K - 1] = 'fast turns'
+    if K > 2:
+        j = int(np.argmax(mu_o[1:K - 1, 0])) + 1
+        names[j] = 'bumpy'
+        for k in range(1, K - 1):
+            if k != j:
+                names[k] = 'cruising'
+    # 0.2 s windows of the warm-up
+    wc = np.arange(win_s / 2, W, win_s)
+    iw = np.searchsorted(ti, wc).clip(0, len(ti) - 1)
+    Fw, cwin = F[iw], comp[iw]
+    pw = np.stack([np.interp(wc, tt, P[:, i]) for i in range(2)], 1)
+
+    # denoised gyro + dead reckoning against the (GT-free) smoothed PGO trajectory
+    g_c = corrected_gyro(ckpt, seq)
+    sm = np.loadtxt(os.path.join(a.run, 'smoothed.txt'))
+    ref = (sm[:, 0], sm[:, 1:4] - origin, Slerp(sm[:, 0], Rotation.from_quat(sm[:, 4:8])))
+    DR = []
+    for s0 in a.dr_starts:
+        tr, pr, prw = dead_reckon(seq, seq.gyr, ref, t0 + s0, a.dr_horizon)
+        _, _, pcd = dead_reckon(seq, g_c, ref, t0 + s0, a.dr_horizon)
+        DR.append((tr, pr, prw, pcd))
+        print(f'DR {s0:.0f}s: raw end err {np.linalg.norm(prw[-1] - pr[-1]):.1f} m, '
+              f'denoised {np.linalg.norm(pcd[-1] - pr[-1]):.1f} m')
 
     # ---- figure
-    fig = plt.figure(figsize=(9.6, 4.8), dpi=100)
+    FW, FH = 9.6, 5.4
+    fig = plt.figure(figsize=(FW, FH), dpi=100)
     fig.patch.set_facecolor(BG)
-    axO = fig.add_axes([0, 0, 1, 1]); axO.set_xlim(0, 1); axO.set_ylim(0, 1); axO.axis('off'); axO.set_zorder(3)
-    axO.patch.set_alpha(0)
-    axM = fig.add_axes([0.01, 0.10, 0.535, 0.78]); axM.axis('off')
-    lo, hi = P[:, :2].min(0) - 12.0, P[:, :2].max(0) + 12.0          # the whole trajectory + a margin
-    r = (0.535 * 9.6) / (0.78 * 4.8)                                    # axes width / height in inches
-    c, span = (lo + hi) / 2, hi - lo
-    sx = max(span[0], span[1] * r)
-    axM.set_xlim(c[0] - sx / 2, c[0] + sx / 2); axM.set_ylim(c[1] - sx / r / 2, c[1] + sx / r / 2)
-    sc = axM.scatter(np.zeros(0), np.zeros(0), s=0.15, color=MAPC, linewidths=0, alpha=0.55)
-    ln_sel, = axM.plot([], [], color=C_SEL, lw=2.6, solid_capstyle='round', zorder=4)
-    ln_lrn, = axM.plot([], [], color=C_LRN, lw=2.0, solid_capstyle='round', zorder=3)
-    head = axM.scatter([], [], s=40, color=FG, zorder=5, edgecolors=BG, linewidths=1.2)
-    # legend
-    for k, (c, s) in enumerate([(C_SEL, 'first 30 s, raw IMU (training data)'), (C_LRN, 'learned IO in the PGO')]):
-        x0 = 0.02 + k * 0.30
-        axO.scatter([x0], [0.955], s=40, color=c)
-        axO.text(x0 + 0.012, 0.955, s, color=c, fontsize=8.5, va='center', fontweight='bold')
+    MAP = [0.01, 0.07, 0.535, 0.80]
+    axM = fig.add_axes(MAP); axM.axis('off')
+    r = (MAP[2] * FW) / (MAP[3] * FH)
+
+    def fit(lo, hi):
+        c, span = (lo + hi) / 2, hi - lo
+        sx = max(span[0], span[1] * r)
+        return np.array([c[0] - sx / 2, c[0] + sx / 2, c[1] - sx / r / 2, c[1] + sx / r / 2])
+
+    i_w = int(np.searchsorted(tt, W))
+    LIM_FULL = fit(P[:, :2].min(0) - 10.0, P[:, :2].max(0) + 10.0)
+    LIM_WARM = fit(P[:i_w + 1, :2].min(0) - 12.0, P[:i_w + 1, :2].max(0) + 12.0)
+
+    def set_lim(L4):
+        axM.set_xlim(L4[0], L4[1]); axM.set_ylim(L4[2], L4[3])
+
+    set_lim(LIM_WARM)
+    WS = [0.625, 0.25, 0.345, 0.52]                                      # workspace (feature plane)
+    axW = fig.add_axes(WS)
+    axO = fig.add_axes([0, 0, 1, 1]); axO.set_xlim(0, 1); axO.set_ylim(0, 1); axO.axis('off'); axO.patch.set_alpha(0)
+    axO.set_zorder(5)
+    xmax, ymax = np.percentile(F[:, 0], 99.5) * 1.08, np.percentile(F[:, 1], 99.5) * 1.08
+    axW.set_xlim(0, xmax); axW.set_ylim(0, ymax)
+    axW.set_facecolor(BG)
+    for s in axW.spines.values():
+        s.set_color(LIGHT)
+    axW.spines['top'].set_visible(False); axW.spines['right'].set_visible(False)
+    axW.tick_params(colors=MUTED, labelsize=7, length=2)
+    axW.set_xlabel('moving  |a − g|  [m/s²]', color=MUTED, fontsize=8.5)
+    axW.set_ylabel('turning  |ω|  [rad/s]', color=MUTED, fontsize=8.5)
+    to_fig = fig.transFigure.inverted()
+
+    def fpt(ax, xy):
+        return to_fig.transform(ax.transData.transform(np.atleast_2d(xy)))
+
+    # map artists
+    sc = axM.scatter(np.zeros(0), np.zeros(0), s=0.15, color=MAPC, linewidths=0, alpha=0.6)
+    seg_sel = LineCollection([], linewidths=3.0, capstyle='round', zorder=4)
+    axM.add_collection(seg_sel)
+    ln_lrn, = axM.plot([], [], color=C_LRN, lw=2.2, solid_capstyle='round', zorder=3)
+    head = axM.scatter([], [], s=46, color=FG, zorder=6, edgecolors=BG, linewidths=1.4)
+    dr_art = []
+    for _ in DR:
+        r0, = axM.plot([], [], color=FG, lw=1.4, alpha=0.6, zorder=7)
+        r1, = axM.plot([], [], color=C_RAW, lw=2.0, ls=(0, (3, 1.5)), zorder=8)
+        r2, = axM.plot([], [], color=C_LRN, lw=2.4, zorder=9)
+        st = axM.scatter([], [], s=50, color=FG, zorder=10, edgecolors=BG, linewidths=1.4)
+        dr_art.append((r0, r1, r2, st))
     clock = axO.text(0.02, 0.905, '', color=MUTED, fontsize=8.5, va='center')
-    axO.plot([0.56, 0.56], [0.03, 0.97], color=LIGHT, lw=0.8)
+    leg = axO.text(0.02, 0.955, '', color=FG, fontsize=9, va='center', fontweight='bold')
+    axO.plot([0.56, 0.56], [0.04, 0.96], color=LIGHT, lw=0.8)
 
-    # sidebar
-    X0 = 0.585
-    BW = 0.39
-    title = axO.text(X0, 0.935, '', color=FG, fontsize=15, fontweight='bold', va='center')
-    subt = axO.text(X0, 0.865, '', color=MUTED, fontsize=9.2, va='center', linespacing=1.4)
-    plab = axO.text(X0, 0.795, '', color=FG, fontsize=8.5, va='center')
-    axP = fig.add_axes([X0 + 0.04, 0.47, BW - 0.04, 0.30]); axP.set_zorder(2)
+    # sidebar text
+    X0 = 0.59
+    step = axO.text(X0, 0.955, '', color=MUTED, fontsize=8, va='center', fontweight='bold')
+    title = axO.text(X0, 0.905, '', color=FG, fontsize=16, fontweight='bold', va='center')
+    subt = axO.text(X0, 0.845, '', color=MUTED, fontsize=9, va='center', linespacing=1.35)
+    big = axO.text(X0, 0.10, '', color=FG, fontsize=22, fontweight='bold', va='center')
+    bigl = axO.text(X0, 0.045, '', color=MUTED, fontsize=8.5, va='center')
 
-    def clear_panel():
-        axP.clear(); axP.set_facecolor(BG); axP.axis('on')
-        for s in axP.spines.values():
-            s.set_color(LIGHT)
-        axP.tick_params(colors=MUTED, labelsize=7.5, length=2)
+    # feature plane artists
+    pts = axW.scatter(np.zeros(0), np.zeros(0), s=9, linewidths=0, color=MUTED, zorder=3)
+    ells = []
+    for k in range(K):
+        j = order[k]
+        C = gm.scaler.scale_[:, None] * gm.gmm.covariances_[j] * gm.scaler.scale_[None]
+        ev, V = np.linalg.eigh(C)
+        e = Ellipse(mu[j], 4 * np.sqrt(ev[1]), 4 * np.sqrt(ev[0]), angle=np.degrees(np.arctan2(V[1, 1], V[0, 1])),
+                    fc=to_rgba(PAL[k], 0), ec=to_rgba(PAL[k], 0), lw=1.8, zorder=2)
+        axW.add_patch(e); ells.append(e)
+    elab = [axW.text(*mu_o[k], f'M{k + 1}', color='white', fontsize=8.5, fontweight='bold', ha='center', va='center',
+                     zorder=6, alpha=0, bbox=dict(boxstyle='round,pad=0.25', fc=PAL[k], ec='none', alpha=0))
+            for k in range(K)]
+    chips = axO.scatter(np.zeros(0), np.zeros(0), s=22, marker='s', linewidths=0, zorder=8)
+    ctr = fpt(axW, mu_o)                                                # regime centres in figure coords
 
-    # running numbers (bars)
-    rows = []
-    for k in range(4):
-        y = 0.375 - k * 0.088
-        lab = axO.text(X0, y, '', color=FG, fontsize=8.3, va='bottom')
-        val = axO.text(X0 + BW, y, '', color=FG, fontsize=8.3, fontweight='bold', va='bottom', ha='right')
-        ghost = FancyBboxPatch((X0, y - 0.028), 0, 0.017, boxstyle='square,pad=0', fc=LIGHT, ec='none')
-        bar = FancyBboxPatch((X0, y - 0.028), 0, 0.017, boxstyle='square,pad=0', fc=LIGHT, ec='none')
-        axO.add_patch(ghost); axO.add_patch(bar)
-        rows.append((lab, val, ghost, bar))
+    # bubbles / net (figure coords)
+    bub = axO.scatter(np.zeros(K), np.zeros(K), s=np.zeros(K), color=[PAL[k] for k in range(K)], zorder=6,
+                      edgecolors=BG, linewidths=1.5, alpha=0)
+    bub_t = [axO.text(0, 0, '', color=FG, fontsize=8.5, fontweight='bold', ha='center', va='top', zorder=7) for _ in range(K)]
+    bub_n = [axO.text(0, 0, '', color=MUTED, fontsize=7.5, ha='center', va='top', zorder=7) for _ in range(K)]
+    layers = [4, 6, 6, 3]
+    NX = np.linspace(0.745, 0.925, len(layers))
+    nodes = [np.stack([np.full(n, x), 0.52 + (np.arange(n) - (n - 1) / 2) * 0.062], 1) for x, n in zip(NX, layers)]
+    edges, ecol = [], []
+    for li in range(len(layers) - 1):
+        for p0 in nodes[li]:
+            for p1 in nodes[li + 1]:
+                edges.append([p0, p1]); ecol.append(li)
+    ecol = np.array(ecol)
+    net_e = LineCollection(edges, colors=[to_rgba(LIGHT, 0)] * len(edges), linewidths=0.9, zorder=4)
+    axO.add_collection(net_e)
+    allnodes = np.concatenate(nodes)
+    ncol = np.concatenate([np.full(n, i) for i, n in enumerate(layers)])
+    net_n = axO.scatter(allnodes[:, 0], allnodes[:, 1], s=60, color=BG, edgecolors=C_NET, linewidths=1.6, zorder=5, alpha=0)
+    net_box = FancyBboxPatch((NX[0] - 0.03, 0.30), NX[-1] - NX[0] + 0.06, 0.44, boxstyle='round,pad=0,rounding_size=0.02',
+                             fc='none', ec=C_NET, lw=1.2, ls='--', alpha=0, zorder=3)
+    axO.add_patch(net_box)
+    net_lab = axO.text((NX[0] + NX[-1]) / 2, 0.76, 'KISS-IMU denoiser', color=C_NET, fontsize=9, fontweight='bold',
+                       ha='center', alpha=0)
+    io_in = axO.text(0.625, 0.52, 'raw\nIMU', color=C_RAW, fontsize=9, fontweight='bold', ha='center', va='center', alpha=0)
+    io_out = axO.text(0.975, 0.52, 'PGO', color=C_LRN, fontsize=9, fontweight='bold', ha='center', va='center', alpha=0,
+                      bbox=dict(boxstyle='round,pad=0.35', fc=BG, ec=C_LRN, lw=1.4, alpha=0))
+    parts = axO.scatter(np.zeros(0), np.zeros(0), s=16, linewidths=0, zorder=8)
+    # loss sparkline
+    axL = fig.add_axes([0.80, 0.045, 0.17, 0.11]); axL.axis('off'); axL.set_xlim(0, len(L)); axL.set_ylim(min(L) * 0.9, max(L) * 1.05)
+    loss_ln, = axL.plot([], [], color=C_NET, lw=1.8)
+    # attitude dials (step 6)
+    axG = fig.add_axes([0.60, 0.25, 0.38, 0.52]); axG.set_xlim(0, 2.2); axG.set_ylim(-0.25, 1.25); axG.set_aspect('equal')
+    axG.axis('off'); axG.set_visible(False)
+    dials = []
+    for k, (cx, col, nm) in enumerate([(0.5, C_RAW, 'raw IMU'), (1.7, C_LRN, 'KISS-IMU')]):
+        axG.add_patch(Wedge((cx, 0.15), 0.5, 0, 180, width=0.02, color=LIGHT))
+        axG.plot([cx, cx], [0.15, 0.65], color=FG, lw=1.0, ls=':', alpha=0.6)
+        wd = Wedge((cx, 0.15), 0.5, 90, 90, width=0.5, color=to_rgba(col, 0.15))
+        axG.add_patch(wd)
+        ar = FancyArrowPatch((cx, 0.15), (cx, 0.65), arrowstyle='-|>', mutation_scale=16, color=col, lw=2.6)
+        axG.add_patch(ar)
+        val = axG.text(cx, -0.08, '', color=col, fontsize=15, fontweight='bold', ha='center', va='center')
+        axG.text(cx, -0.22, nm, color=MUTED, fontsize=8.5, ha='center', va='center')
+        dials.append((cx, wd, ar, val))
+    axG.text(1.1, 0.9, 'IMU-only attitude drift over 60 s (RMSE)', color=MUTED, fontsize=8.5, ha='center')
 
-    def row(k, label, value, frac, color, ghost=None):
-        lab, val, g, b = rows[k]
-        lab.set_text(label); val.set_text(value)
-        b.set_width(BW * float(np.clip(frac, 0, 1))); b.set_facecolor(color)
-        g.set_width(BW * float(np.clip(ghost, 0, 1)) if ghost is not None else 0)
-
-    pill = FancyBboxPatch((0.015, 0.03), 0.53, 0.06, boxstyle='round,pad=0,rounding_size=0.012', fc='#fce4ec',
-                          ec='none', alpha=0)
+    pill = FancyBboxPatch((0.015, 0.025), 0.53, 0.055, boxstyle='round,pad=0,rounding_size=0.012', fc='#e0f2f1',
+                          ec='none', alpha=0, zorder=9)
     axO.add_patch(pill)
-    pill_t = axO.text(0.025, 0.06, '', color=C_SEL, fontsize=9, fontweight='bold', va='center')
+    pill_t = axO.text(0.03, 0.0525, '', color=C_LRN, fontsize=9, fontweight='bold', va='center', zorder=10)
 
-    N1, N2, N3, N4, N5, HOLD = 80, 75, 75, 60, 130, 45
-    total = N1 + N2 + N3 + N4 + N5 + HOLD
-    i_sel = np.searchsorted(tt, W)
-    rng2 = np.random.default_rng(1)
-    sub = np.sort(rng2.choice(len(F), min(1500, len(F)), replace=False))
-    Fs, cs = F[sub], comp[sub]
-    xmax, ymax = np.percentile(F[:, 0], 99.5) * 1.1, np.percentile(F[:, 1], 99.5) * 1.1
-    gnorm = np.linalg.norm(seq.gyr[m], axis=1)
-    dec = max(1, len(ti) // 600)
-    state = {'stage': -1}
-    rare_lab = f'rarest motion regime M{rare + 1}: share of the signal'
+    NA, NB, NC, ND, NE, NF, HOLD = 85, 55, 60, 65, 90, 95, 40
+    S = np.cumsum([0, NA, NB, NC, ND, NE, NF])
+    total = int(S[-1] + HOLD)
+    FLY = 14
+    i_sel = int(np.searchsorted(tt, W))
+    src = fpt(axM, pw)
+    dst = fpt(axW, Fw)
+    regime_col = np.array([to_rgba(PAL[c]) for c in cwin])
+    grey = np.array(to_rgba('#8a939d'))
+    row_y = np.linspace(0.70, 0.32, K)                                    # bubble column in step 4
+    row_x = np.linspace(0.66, 0.94, K)                                    # bubble row in step 3
+    SZ = 5200.0                                                            # marker area (pt^2) for share 1
+    prt = {'p0': np.zeros((0, 2)), 'p1': np.zeros((0, 2)), 'age': np.zeros(0), 'col': np.zeros((0, 4)), 'dur': np.zeros(0)}
+    prng = np.random.default_rng(3)
+    comp_scan = comp[np.searchsorted(ti, tt[:i_sel + 1]).clip(0, len(ti) - 1)]
+    path_reg = np.array([to_rgba(PAL[c]) for c in comp_scan])
 
-    def draw_map(tc):
-        k = mt <= tc
-        sc.set_offsets(mp[k, :2])
+    def map_to(tc, path_cols=None):
+        sc.set_offsets(mp[mt <= tc])
         j = int(np.searchsorted(tt, tc))
         js = min(j, i_sel)
-        ln_sel.set_data(P[:js + 1, 0], P[:js + 1, 1])
+        pts_ = P[:js + 1, :2]
+        segs = np.stack([pts_[:-1], pts_[1:]], 1) if js > 0 else np.zeros((0, 2, 2))
+        seg_sel.set_segments(segs)
+        seg_sel.set_color(path_cols[:max(js, 0)] if path_cols is not None else C_SEL)
         if j > i_sel:
             ln_lrn.set_data(P[i_sel:j + 1, 0], P[i_sel:j + 1, 1])
         head.set_offsets([P[min(j, len(P) - 1), :2]])
-        clock.set_text(f'{a.seq}   t = {tc:5.1f} s / {T:.0f} s')
+        clock.set_text(f'{a.seq}    t = {tc:5.1f} s / {T:.0f} s')
 
-    def stage(sidx, ttl, st, pl):
-        title.set_text(ttl); subt.set_text(st); plab.set_text(pl)
-        if state['stage'] != sidx:
-            state['stage'] = sidx
-            clear_panel()
-            return True
-        return False
+    def text(n, ttl, st):
+        step.set_text(f'STEP {n} / 6'); title.set_text(ttl); subt.set_text(st)
+
+    def spawn(p0, p1, col, dur):
+        prt['p0'] = np.vstack([prt['p0'], p0]); prt['p1'] = np.vstack([prt['p1'], p1])
+        prt['col'] = np.vstack([prt['col'], col]); prt['age'] = np.r_[prt['age'], np.zeros(len(p0))]
+        prt['dur'] = np.r_[prt['dur'], np.full(len(p0), dur)]
+
+    def step_particles():
+        prt['age'] += 1
+        keep = prt['age'] <= prt['dur']
+        for k in prt:
+            prt[k] = prt[k][keep]
+        u = ease(prt['age'] / np.maximum(prt['dur'], 1))[:, None]
+        pos = (1 - u) * prt['p0'] + u * prt['p1']
+        parts.set_offsets(pos if len(pos) else np.zeros((0, 2)))
+        if len(pos):
+            parts.set_color(prt['col'])
+
+    def net_wave(f, alpha=1.0):
+        ph = (f * 0.12) % (len(layers) + 1)
+        lit = np.exp(-((ecol + 0.5 - ph) ** 2) / 0.4)
+        net_e.set_color(np.array([to_rgba(C_NET, alpha * (0.12 + 0.75 * v)) for v in lit]))
+        nl = np.exp(-((ncol - ph) ** 2) / 0.4)
+        net_n.set_facecolor([to_rgba(C_NET, 0.15 + 0.85 * v) for v in nl])
+
+    def show_net(al):
+        net_n.set_alpha(al); net_box.set_alpha(al); net_lab.set_alpha(al)
+        if al == 0:
+            net_e.set_color([to_rgba(LIGHT, 0)] * len(edges))
 
     def frame(f):
-        if f >= N1:
-            row(0, 'training data', f'first {W:.0f} s of {T:.0f} s', W / T, C_SEL)
-        if f >= N1 + N2 + N3:
-            row(1, rare_lab, f'{100 * s_raw[rare]:.0f} % → {100 * s_bal[rare]:.0f} %', s_bal[rare],
-                PAL[rare % len(PAL)], ghost=s_raw[rare])
-        if f >= N1 + N2 + N3 + N4:
-            row(2, 'training loss', f'{L[0]:.2f} → {L[-1]:.2f}', L[-1] / L[0], C_LOSS, ghost=1.0)
-
-        if f < N1:                                                     # 1. data selection
-            q = min(1.0, (f + 1) / (0.75 * N1))
+        if f < S[1]:                                                       # 1. collect
+            q = min(1.0, (f + 1) / (0.8 * NA))
             tc = q * W
-            new = stage(0, 'Data selection', 'the first 30 s run on the raw IMU;\nLiDAR odometry poses become the labels',
-                        '|ω| of the IMU stream  [rad/s]')
-            if new:
-                axP.set_xlim(0, W); axP.set_ylim(0, np.percentile(gnorm, 99.5) * 1.1)
-                axP._ln, = axP.plot([], [], color=C_SEL, lw=1.0)
-                axP.set_xlabel('t [s]', color=MUTED, fontsize=7)
-            k = ti[::dec] <= tc
-            axP._ln.set_data(ti[::dec][k], gnorm[::dec][k])
-            draw_map(tc)
-            row(0, 'training data', f'{tc:4.1f} s of {T:.0f} s', tc / T, C_SEL)
-        elif f < N1 + N2:                                              # 2. motion regimes
-            q = ease((f - N1 + 1 - 10) / (0.55 * N2))
-            new = stage(1, 'Motion regimes', 'a 0.2 s window turns the IMU into motion\nfeatures; a GMM splits them (K by BIC)',
-                        f'motion features, K = {gm.K} regimes')
-            if new:
-                axP.set_xlim(0, xmax); axP.set_ylim(0, ymax)
-                axP.set_xlabel('|mean gravity-free acc|', color=MUTED, fontsize=7)
-                axP.set_ylabel('|mean ω|', color=MUTED, fontsize=7)
-                axP._sc = axP.scatter(Fs[:, 0], Fs[:, 1], s=5, linewidths=0, color=MAPC)
-                axP._el = []
-                for kk in range(gm.K):
-                    j = order[kk]
-                    C = gm.scaler.scale_[:, None] * gm.gmm.covariances_[j] * gm.scaler.scale_[None]
-                    ev, V = np.linalg.eigh(C)
-                    e = Ellipse(mu[j], 4 * np.sqrt(ev[1]), 4 * np.sqrt(ev[0]),
-                                angle=np.degrees(np.arctan2(V[1, 1], V[0, 1])), fill=False, lw=2.0,
-                                color=PAL[kk % len(PAL)], alpha=0)
-                    axP.add_patch(e); axP._el.append(e)
-                axP._mt = [axP.text(*mu[order[kk]], f'M{kk + 1}', color='white', fontsize=8.5, fontweight='bold', ha='center',
-                                    va='center', alpha=0, zorder=6, bbox=dict(boxstyle='round,pad=0.2', fc=PAL[kk % len(PAL)], ec='none', alpha=0))
-                           for kk in range(gm.K)]
-            base = np.array(to_rgba(MAPC))
-            cols = np.array([to_rgba(PAL[c % len(PAL)]) for c in cs])
-            axP._sc.set_color((1 - q) * base + q * cols)
-            for e in axP._el:
-                e.set_alpha(q)
-            for tx in axP._mt:
+            text(1, 'Collect', f'the robot runs the first {W:.0f} s on the raw IMU;\n'
+                               f'every {win_s:.1f} s IMU window becomes one motion point')
+            leg.set_text('— first 30 s on the raw IMU (training data)'); leg.set_color(C_SEL)
+            map_to(tc)
+            ft = int(np.searchsorted(wc, tc))                                # windows emitted so far
+            age = f - (wc[:ft] / W) * 0.8 * NA
+            fly = age < FLY
+            landed = ~fly
+            u = ease(age[fly] / FLY)[:, None]
+            pos = (1 - u) * src[:ft][fly] + u * dst[:ft][fly]
+            pos[:, 1] += 0.10 * np.sin(np.pi * u[:, 0])
+            chips.set_offsets(pos if len(pos) else np.zeros((0, 2))); chips.set_color('#8a939d')
+            pts.set_offsets(Fw[:ft][landed] if landed.any() else np.zeros((0, 2))); pts.set_color('#8a939d')
+            big.set_text(f'{int(landed.sum())}'); big.set_color(FG)
+            bigl.set_text(f'motion points from {min(tc, W):4.1f} s of IMU  (GT-free)')
+        elif f < S[2]:                                                     # 2. group
+            q = ease((f - S[1] + 1 - 5) / (0.55 * NB))
+            chips.set_offsets(np.zeros((0, 2)))
+            text(2, 'Group', 'a GMM finds the motion regimes (K by BIC);\nthe path takes their colours')
+            pts.set_offsets(Fw); pts.set_color((1 - q) * grey + q * regime_col)
+            for k, e in enumerate(ells):
+                e.set_facecolor(to_rgba(PAL[k], 0.10 * q)); e.set_edgecolor(to_rgba(PAL[k], q))
+            for k, tx in enumerate(elab):
                 tx.set_alpha(q); tx.get_bbox_patch().set_alpha(q)
-            row(1, rare_lab, f'{100 * s_raw[rare]:.0f} %', q * s_raw[rare], PAL[rare % len(PAL)])
-        elif f < N1 + N2 + N3:                                         # 3. reweighting
-            q = ease((f - N1 - N2 + 1 - 15) / (0.5 * N3))
-            new = stage(2, 'Motion-balanced reweighting', 'effective-number weights per regime:\nrare motion is not drowned out',
-                        'share of the training signal per regime')
-            x = np.arange(gm.K)
-            if new:
-                axP._b = axP.bar(x, s_raw, color=[PAL[k % len(PAL)] for k in range(gm.K)], width=0.6)
-                axP.bar(x, s_raw, color='none', edgecolor=MUTED, lw=0.9, ls='--', width=0.6)
-                axP.set_xticks(x); axP.set_xticklabels([f'M{k + 1}' for k in range(gm.K)])
-                axP.set_ylim(0, max(s_raw.max(), s_bal.max()) * 1.25)
-                axP._t = [axP.text(k, 0, '', ha='center', va='bottom', color=FG, fontsize=8.5, fontweight='bold') for k in range(gm.K)]
-                axP._w = [axP.text(k, 0.004, f'×{cw[k]:.2f}', ha='center', va='bottom', color='white', fontsize=8, alpha=0)
-                          for k in range(gm.K)]
-            sh = (1 - q) * s_raw + q * s_bal
-            for b, s, tx in zip(axP._b, sh, axP._t):
-                b.set_height(s); tx.set_y(s); tx.set_text(f'{100 * s:.0f}%')
-            for tw in axP._w:
-                tw.set_alpha(min(1.0, 2 * q))
-            row(1, rare_lab, f'{100 * s_raw[rare]:.0f} % → {100 * sh[rare]:.0f} %', sh[rare], PAL[rare % len(PAL)],
-                ghost=s_raw[rare])
-        elif f < N1 + N2 + N3 + N4:                                    # 4. training
-            q = ease((f - N1 - N2 - N3 + 1) / (0.75 * N4))
-            new = stage(3, 'Training', 'the denoiser learns gyro + acc corrections\nfrom the balanced labels (multi-horizon)',
-                        'training loss')
-            if new:
-                axP.set_xlim(0, len(L)); axP.set_ylim(min(L) * 0.9, max(L) * 1.05)
-                axP.set_xlabel('epoch', color=MUTED, fontsize=7)
-                axP._ln, = axP.plot([], [], color=C_LOSS, lw=2.2)
-            n = max(1, int(q * len(L)))
-            axP._ln.set_data(np.arange(n), L[:n])
-            row(2, 'training loss', f'{L[0]:.2f} → {L[n - 1]:.2f}', L[n - 1] / L[0], C_LOSS, ghost=1.0)
-        else:                                                          # 5. learned IO -> PGO
-            q = min(1.0, (f - N1 - N2 - N3 - N4 + 1) / (0.85 * N5))
+                tx.set_text(f'M{k + 1}  {names[k]}')
+            leg.set_text('— path coloured by motion regime'); leg.set_color(FG)
+            map_to(W, (1 - q) * np.array(to_rgba(C_SEL)) + q * path_reg)
+            big.set_text(f'K = {K}'); bigl.set_text(f'motion regimes in the first {W:.0f} s')
+        elif f < S[3]:                                                     # 3. balance
+            fl = f - S[2]
+            q1 = ease((fl + 1) / 20)                                         # plane -> bubbles
+            q2 = ease((fl + 1 - 26) / 22)                                    # raw -> balanced
+            text(3, 'Balance', 'each regime\'s share of the training signal:\nrare motion is weighted up (effective number)')
+            map_to(W, path_reg)
+            pts.set_alpha(1 - q1)
+            for k, e in enumerate(ells):
+                e.set_facecolor(to_rgba(PAL[k], 0.10 * (1 - q1))); e.set_edgecolor(to_rgba(PAL[k], 1 - q1))
+            for tx in elab:
+                tx.set_alpha(1 - q1); tx.get_bbox_patch().set_alpha(1 - q1)
+            pos = (1 - q1) * ctr + q1 * np.stack([row_x, np.full(K, 0.55)], 1)
+            sh = (1 - q2) * s_raw + q2 * s_bal
+            bub.set_offsets(pos); bub.set_sizes(SZ * sh * q1 + 1); bub.set_alpha(min(1, q1 * 1.5))
+            for k in range(K):
+                rr = np.sqrt(SZ * sh[k] / np.pi) / 72 / FH                   # marker radius in figure height
+                bub_t[k].set_position((pos[k, 0], 0.55 - rr - 0.02)); bub_t[k].set_text(f'{100 * sh[k]:.0f}%')
+                bub_t[k].set_alpha(q1)
+                bub_n[k].set_position((pos[k, 0], 0.55 - rr - 0.065))
+                bub_n[k].set_text(f'M{k + 1} {names[k]}' + (f'\n×{cw[k]:.2f}' if q2 > 0.3 else ''))
+                bub_n[k].set_alpha(q1)
+            axW.set_visible(q1 < 0.99)
+            big.set_text(f'{100 * s_raw[rare]:.0f}% → {100 * sh[rare]:.0f}%'); big.set_color(PAL[rare])
+            bigl.set_text(f'share of the rarest regime (M{rare + 1}, {names[rare]})')
+        elif f < S[4]:                                                     # 4. learn
+            fl = f - S[3]
+            q1 = ease((fl + 1) / 15)
+            text(4, 'Learn', 'the balanced regimes train the denoiser\n(gyro + acc corrections, LiDAR labels)')
+            axW.set_visible(False)
+            pos = (1 - q1) * np.stack([row_x, np.full(K, 0.55)], 1) + q1 * np.stack([np.full(K, 0.635), row_y], 1)
+            bub.set_offsets(pos); bub.set_sizes(SZ * (1 - 0.7 * q1) * s_bal + 1)
+            for k in range(K):
+                bub_t[k].set_alpha(1 - q1); bub_n[k].set_alpha(1 - q1)
+            show_net(q1)
+            net_wave(f, q1)
+            if 10 < fl < ND - 8:
+                ks = prng.choice(K, 3, p=s_bal)
+                tgt = nodes[0][prng.integers(0, layers[0], 3)]
+                spawn(pos[ks], tgt, np.array([to_rgba(PAL[k]) for k in ks]), 12)
+            step_particles()
+            qn = ease((fl + 1 - 10) / (ND - 18))
+            n = max(1, int(qn * len(L)))
+            loss_ln.set_data(np.arange(n), L[:n])
+            big.set_text(f'{L[0]:.2f} → {L[n - 1]:.2f}'); big.set_color(C_NET); bigl.set_text('training loss')
+        elif f < S[5]:                                                     # 5. run with the learned IO
+            fl = f - S[4]
+            q1 = ease((fl + 1) / 12)
+            q = min(1.0, (fl + 1) / (0.85 * NE))
+            text(5, 'Run', 'the running PGO switches to the denoised IMU\n(learned IO), no restart; the map is built')
+            bub.set_alpha(1 - q1)
+            io_in.set_alpha(q1); io_out.set_alpha(q1); io_out.get_bbox_patch().set_alpha(q1)
+            show_net(1.0)
+            net_wave(f)
+            if fl < NE - 6:
+                spawn(np.array([[0.65, 0.52]]), nodes[0][prng.integers(0, layers[0], 1)], np.array([to_rgba(C_RAW)]), 9)
+                spawn(nodes[-1][prng.integers(0, layers[-1], 1)], np.array([[0.955, 0.52]]), np.array([to_rgba(C_LRN)]), 9)
+            step_particles()
+            loss_ln.set_data([], [])
+            set_lim((1 - ease(fl / 18)) * LIM_WARM + ease(fl / 18) * LIM_FULL)
             tc = W + q * (T - W)
-            new = stage(4, 'Learned IO → PGO', 'the running PGO switches to the corrected\nIMU, no restart; the map is built',
-                        'data flow')
-            if new:
-                axP.set_xlim(0, 1); axP.set_ylim(0, 1); axP.axis('off')
-                bx = {'IMU': (0.12, 0.72, C_SEL), 'KISS-IMU': (0.48, 0.72, C_LRN), 'PGO': (0.86, 0.46, C_RAW),
-                      'LiDAR': (0.12, 0.20, MUTED)}
-                for name, (x, y, c) in bx.items():
-                    wd = 0.26 if name == 'KISS-IMU' else 0.2
-                    axP.add_patch(FancyBboxPatch((x - wd / 2, y - 0.09), wd, 0.18,
-                                                 boxstyle='round,pad=0,rounding_size=0.04', fc=BG, ec=c, lw=1.6))
-                    axP.text(x, y, name, ha='center', va='center', color=c, fontsize=9.5, fontweight='bold')
-                paths = [((0.22, 0.72), (0.35, 0.72), C_SEL), ((0.61, 0.72), (0.86, 0.72), C_LRN),
-                         ((0.86, 0.72), (0.86, 0.55), C_LRN), ((0.22, 0.20), (0.86, 0.20), MUTED),
-                         ((0.86, 0.20), (0.86, 0.37), MUTED)]
-                axP._paths = []
-                for p0, p1, c in paths:
-                    axP.plot([p0[0], p1[0]], [p0[1], p1[1]], color=c, lw=1.2, alpha=0.35)
-                    axP._paths.append((np.array(p0), np.array(p1), axP.scatter([], [], s=14, color=c, zorder=5)))
-                axP.text(0.74, 0.78, 'learned IO', color=C_LRN, fontsize=7, ha='center')
-                axP.text(0.29, 0.78, 'raw', color=C_SEL, fontsize=7, ha='center')
-                axP.text(0.50, 0.25, 'scans', color=MUTED, fontsize=7, ha='center')
-            u = (np.arange(3) / 3 + f * 0.04) % 1.0
-            for p0, p1, s in axP._paths:
-                s.set_offsets(p0[None] + u[:, None] * (p1 - p0)[None])
-            draw_map(tc)
-            if att_raw is not None:
-                e = ease(q * 3)
-                row(3, 'IMU-only attitude drift over 60 s', f'{att_raw:.0f}° → {att_lrn:.0f}°',
-                    e * att_lrn / att_raw + (1 - e), C_LRN, ghost=1.0)
-            k0 = N1 + N2 + N3 + N4 + N5 - 25
-            if f >= k0:
-                al = min(1, (f - k0) / 10)
+            map_to(tc, path_reg)
+            leg.set_text('— learned IO in the PGO'); leg.set_color(C_LRN)
+            big.set_text(f'{tc:.0f} s'); big.set_color(C_LRN); bigl.set_text('on the learned IO, one run, no GT')
+        else:                                                              # 6. denoised
+            fl = f - S[5]
+            q1 = ease((fl + 1) / 12)
+            q = ease((fl + 1 - 10) / (0.7 * NF))
+            text(6, 'Denoised', f'gyro-only dead reckoning for {a.dr_horizon:.0f} s from a few points\n'
+                                f'(speed from LiDAR): raw IMU vs KISS-IMU')
+            show_net(1 - q1); net_wave(f, 1 - q1)
+            io_in.set_alpha(1 - q1); io_out.set_alpha(1 - q1); io_out.get_bbox_patch().set_alpha(1 - q1)
+            parts.set_offsets(np.zeros((0, 2)))
+            if q1 >= 1:
+                show_net(0)
+            axG.set_visible(True)
+            ln_lrn.set_color((1 - q1) * np.array(to_rgba(C_LRN)) + q1 * np.array(to_rgba('#c5ccd3')))
+            seg_sel.set_alpha(1 - 0.7 * q1); head.set_alpha(1 - q1)
+            leg.set_text('— reference (LiDAR)    - - raw IMU    — KISS-IMU'); leg.set_color(FG)
+            clock.set_text(f'{a.seq}    dead reckoning  {q * a.dr_horizon:4.1f} s / {a.dr_horizon:.0f} s')
+            for (tr, pr, prw, pcd), (r0, r1, r2, st) in zip(DR, dr_art):
+                n = max(2, int(q * len(tr)))
+                r0.set_data(pr[:n, 0], pr[:n, 1]); r1.set_data(prw[:n, 0], prw[:n, 1]); r2.set_data(pcd[:n, 0], pcd[:n, 1])
+                st.set_offsets([pr[0]])
+            for (cx, wd, ar, val), ang in zip(dials, [att_raw, att_lrn]):
+                aq = q * ang
+                wd.set_theta1(90 - aq); wd.set_theta2(90)
+                th = np.radians(90 - aq)
+                ar.set_positions((cx, 0.15), (cx + 0.5 * np.cos(th), 0.15 + 0.5 * np.sin(th)))
+                val.set_text(f'{aq:.0f}°')
+            big.set_text(''); bigl.set_text('')
+            if fl > 0.75 * NF:
+                al = min(1, (fl - 0.75 * NF) / 10)
                 pill.set_alpha(al); pill_t.set_alpha(al)
                 pill_t.set_text(f'trained on {W:.0f} s of its own run · no GT' +
                                 (f' · ATE {ate_raw:.3f} → {ate_lrn:.3f} m' if ate_raw is not None else ''))
@@ -336,7 +501,7 @@ def main():
     anim = FuncAnimation(fig, frame, frames=total, blit=False)
     os.makedirs(os.path.dirname(os.path.abspath(a.out)), exist_ok=True)
     anim.save(a.out, writer=PillowWriter(fps=a.fps), savefig_kwargs={'facecolor': BG})
-    print('saved', a.out, 'K', gm.K, 'rare', rare, s_raw.round(3), s_bal.round(3), att_raw, att_lrn, ate_raw, ate_lrn)
+    print('saved', a.out, 'K', K, names, s_raw.round(3), s_bal.round(3), att_raw, att_lrn)
 
 
 if __name__ == '__main__':
