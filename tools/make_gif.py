@@ -60,7 +60,7 @@ def main():
     ap.add_argument('--train', help="dir with history.json (default: the run's last train* dir)")
     ap.add_argument('--raw', help='raw-IMU run dir (result.json) for the ATE line')
     ap.add_argument('--out', default='fig/kiss_imu_online.gif')
-    ap.add_argument('--fps', type=int, default=20)
+    ap.add_argument('--fps', type=int, default=15)
     ap.add_argument('--map-every', type=int, default=3)
     ap.add_argument('--points', type=int, default=900)
     ap.add_argument('--zmax', type=float, default=3.0)
@@ -126,9 +126,9 @@ def main():
     fig.patch.set_facecolor(BG)
     axO = fig.add_axes([0, 0, 1, 1]); axO.set_xlim(0, 1); axO.set_ylim(0, 1); axO.axis('off'); axO.set_zorder(3)
     axO.patch.set_alpha(0)
-    axM = fig.add_axes([0.01, 0.10, 0.60, 0.78]); axM.axis('off')
+    axM = fig.add_axes([0.01, 0.10, 0.535, 0.78]); axM.axis('off')
     lo, hi = P[:, :2].min(0) - 12.0, P[:, :2].max(0) + 12.0          # the whole trajectory + a margin
-    r = (0.60 * 9.6) / (0.78 * 4.8)                                    # axes width / height in inches
+    r = (0.535 * 9.6) / (0.78 * 4.8)                                    # axes width / height in inches
     c, span = (lo + hi) / 2, hi - lo
     sx = max(span[0], span[1] * r)
     axM.set_xlim(c[0] - sx / 2, c[0] + sx / 2); axM.set_ylim(c[1] - sx / r / 2, c[1] + sx / r / 2)
@@ -138,32 +138,32 @@ def main():
     head = axM.scatter([], [], s=40, color=FG, zorder=5, edgecolors=BG, linewidths=1.2)
     # legend
     for k, (c, s) in enumerate([(C_SEL, 'first 30 s, raw IMU (training data)'), (C_LRN, 'learned IO in the PGO')]):
-        x0 = 0.02 + k * 0.32
+        x0 = 0.02 + k * 0.30
         axO.scatter([x0], [0.955], s=40, color=c)
         axO.text(x0 + 0.012, 0.955, s, color=c, fontsize=8.5, va='center', fontweight='bold')
     clock = axO.text(0.02, 0.905, '', color=MUTED, fontsize=8.5, va='center')
-    axO.plot([0.625, 0.625], [0.03, 0.97], color=LIGHT, lw=0.8)
+    axO.plot([0.56, 0.56], [0.03, 0.97], color=LIGHT, lw=0.8)
 
     # sidebar
-    X0 = 0.655
-    BW = 0.315
-    title = axO.text(X0, 0.935, '', color=FG, fontsize=13, fontweight='bold', va='center')
-    subt = axO.text(X0, 0.87, '', color=MUTED, fontsize=8.2, va='center', linespacing=1.4)
-    plab = axO.text(X0, 0.805, '', color=MUTED, fontsize=8, va='center')
-    axP = fig.add_axes([X0 + 0.03, 0.50, BW - 0.03, 0.275]); axP.set_zorder(2)
+    X0 = 0.585
+    BW = 0.39
+    title = axO.text(X0, 0.935, '', color=FG, fontsize=15, fontweight='bold', va='center')
+    subt = axO.text(X0, 0.865, '', color=MUTED, fontsize=9.2, va='center', linespacing=1.4)
+    plab = axO.text(X0, 0.795, '', color=FG, fontsize=8.5, va='center')
+    axP = fig.add_axes([X0 + 0.04, 0.47, BW - 0.04, 0.30]); axP.set_zorder(2)
 
     def clear_panel():
         axP.clear(); axP.set_facecolor(BG); axP.axis('on')
         for s in axP.spines.values():
             s.set_color(LIGHT)
-        axP.tick_params(colors=MUTED, labelsize=6.5, length=2)
+        axP.tick_params(colors=MUTED, labelsize=7.5, length=2)
 
     # running numbers (bars)
     rows = []
     for k in range(4):
         y = 0.375 - k * 0.088
-        lab = axO.text(X0, y, '', color=FG, fontsize=7.6, va='bottom')
-        val = axO.text(X0 + BW, y, '', color=FG, fontsize=7.6, va='bottom', ha='right')
+        lab = axO.text(X0, y, '', color=FG, fontsize=8.3, va='bottom')
+        val = axO.text(X0 + BW, y, '', color=FG, fontsize=8.3, fontweight='bold', va='bottom', ha='right')
         ghost = FancyBboxPatch((X0, y - 0.028), 0, 0.017, boxstyle='square,pad=0', fc=LIGHT, ec='none')
         bar = FancyBboxPatch((X0, y - 0.028), 0, 0.017, boxstyle='square,pad=0', fc=LIGHT, ec='none')
         axO.add_patch(ghost); axO.add_patch(bar)
@@ -175,12 +175,12 @@ def main():
         b.set_width(BW * float(np.clip(frac, 0, 1))); b.set_facecolor(color)
         g.set_width(BW * float(np.clip(ghost, 0, 1)) if ghost is not None else 0)
 
-    pill = FancyBboxPatch((0.015, 0.03), 0.59, 0.06, boxstyle='round,pad=0,rounding_size=0.012', fc='#fce4ec',
+    pill = FancyBboxPatch((0.015, 0.03), 0.53, 0.06, boxstyle='round,pad=0,rounding_size=0.012', fc='#fce4ec',
                           ec='none', alpha=0)
     axO.add_patch(pill)
-    pill_t = axO.text(0.03, 0.06, '', color=C_SEL, fontsize=9.5, fontweight='bold', va='center')
+    pill_t = axO.text(0.025, 0.06, '', color=C_SEL, fontsize=9, fontweight='bold', va='center')
 
-    N1, N2, N3, N4, N5, HOLD = 50, 32, 32, 32, 100, 30
+    N1, N2, N3, N4, N5, HOLD = 80, 75, 75, 60, 130, 45
     total = N1 + N2 + N3 + N4 + N5 + HOLD
     i_sel = np.searchsorted(tt, W)
     rng2 = np.random.default_rng(1)
@@ -221,44 +221,49 @@ def main():
             row(2, 'training loss', f'{L[0]:.2f} → {L[-1]:.2f}', L[-1] / L[0], C_LOSS, ghost=1.0)
 
         if f < N1:                                                     # 1. data selection
-            q = (f + 1) / N1
+            q = min(1.0, (f + 1) / (0.75 * N1))
             tc = q * W
             new = stage(0, 'Data selection', 'the first 30 s run on the raw IMU;\nLiDAR odometry poses become the labels',
                         '|ω| of the IMU stream  [rad/s]')
             if new:
                 axP.set_xlim(0, W); axP.set_ylim(0, np.percentile(gnorm, 99.5) * 1.1)
-                axP._ln, = axP.plot([], [], color=C_SEL, lw=0.8)
+                axP._ln, = axP.plot([], [], color=C_SEL, lw=1.0)
                 axP.set_xlabel('t [s]', color=MUTED, fontsize=7)
             k = ti[::dec] <= tc
             axP._ln.set_data(ti[::dec][k], gnorm[::dec][k])
             draw_map(tc)
             row(0, 'training data', f'{tc:4.1f} s of {T:.0f} s', tc / T, C_SEL)
         elif f < N1 + N2:                                              # 2. motion regimes
-            q = ease((f - N1 + 1) / N2)
+            q = ease((f - N1 + 1 - 10) / (0.55 * N2))
             new = stage(1, 'Motion regimes', 'a 0.2 s window turns the IMU into motion\nfeatures; a GMM splits them (K by BIC)',
                         f'motion features, K = {gm.K} regimes')
             if new:
                 axP.set_xlim(0, xmax); axP.set_ylim(0, ymax)
                 axP.set_xlabel('|mean gravity-free acc|', color=MUTED, fontsize=7)
                 axP.set_ylabel('|mean ω|', color=MUTED, fontsize=7)
-                axP._sc = axP.scatter(Fs[:, 0], Fs[:, 1], s=2.5, linewidths=0, color=MAPC)
+                axP._sc = axP.scatter(Fs[:, 0], Fs[:, 1], s=5, linewidths=0, color=MAPC)
                 axP._el = []
                 for kk in range(gm.K):
                     j = order[kk]
                     C = gm.scaler.scale_[:, None] * gm.gmm.covariances_[j] * gm.scaler.scale_[None]
                     ev, V = np.linalg.eigh(C)
                     e = Ellipse(mu[j], 4 * np.sqrt(ev[1]), 4 * np.sqrt(ev[0]),
-                                angle=np.degrees(np.arctan2(V[1, 1], V[0, 1])), fill=False, lw=1.4,
+                                angle=np.degrees(np.arctan2(V[1, 1], V[0, 1])), fill=False, lw=2.0,
                                 color=PAL[kk % len(PAL)], alpha=0)
                     axP.add_patch(e); axP._el.append(e)
+                axP._mt = [axP.text(*mu[order[kk]], f'M{kk + 1}', color='white', fontsize=8.5, fontweight='bold', ha='center',
+                                    va='center', alpha=0, zorder=6, bbox=dict(boxstyle='round,pad=0.2', fc=PAL[kk % len(PAL)], ec='none', alpha=0))
+                           for kk in range(gm.K)]
             base = np.array(to_rgba(MAPC))
             cols = np.array([to_rgba(PAL[c % len(PAL)]) for c in cs])
             axP._sc.set_color((1 - q) * base + q * cols)
             for e in axP._el:
                 e.set_alpha(q)
+            for tx in axP._mt:
+                tx.set_alpha(q); tx.get_bbox_patch().set_alpha(q)
             row(1, rare_lab, f'{100 * s_raw[rare]:.0f} %', q * s_raw[rare], PAL[rare % len(PAL)])
         elif f < N1 + N2 + N3:                                         # 3. reweighting
-            q = ease((f - N1 - N2 + 1 - 6) / (N3 - 12))
+            q = ease((f - N1 - N2 + 1 - 15) / (0.5 * N3))
             new = stage(2, 'Motion-balanced reweighting', 'effective-number weights per regime:\nrare motion is not drowned out',
                         'share of the training signal per regime')
             x = np.arange(gm.K)
@@ -267,25 +272,29 @@ def main():
                 axP.bar(x, s_raw, color='none', edgecolor=MUTED, lw=0.9, ls='--', width=0.6)
                 axP.set_xticks(x); axP.set_xticklabels([f'M{k + 1}' for k in range(gm.K)])
                 axP.set_ylim(0, max(s_raw.max(), s_bal.max()) * 1.25)
-                axP._t = [axP.text(k, 0, '', ha='center', va='bottom', color=FG, fontsize=7) for k in range(gm.K)]
+                axP._t = [axP.text(k, 0, '', ha='center', va='bottom', color=FG, fontsize=8.5, fontweight='bold') for k in range(gm.K)]
+                axP._w = [axP.text(k, 0.004, f'×{cw[k]:.2f}', ha='center', va='bottom', color='white', fontsize=8, alpha=0)
+                          for k in range(gm.K)]
             sh = (1 - q) * s_raw + q * s_bal
             for b, s, tx in zip(axP._b, sh, axP._t):
                 b.set_height(s); tx.set_y(s); tx.set_text(f'{100 * s:.0f}%')
+            for tw in axP._w:
+                tw.set_alpha(min(1.0, 2 * q))
             row(1, rare_lab, f'{100 * s_raw[rare]:.0f} % → {100 * sh[rare]:.0f} %', sh[rare], PAL[rare % len(PAL)],
                 ghost=s_raw[rare])
         elif f < N1 + N2 + N3 + N4:                                    # 4. training
-            q = ease((f - N1 - N2 - N3 + 1) / N4)
+            q = ease((f - N1 - N2 - N3 + 1) / (0.75 * N4))
             new = stage(3, 'Training', 'the denoiser learns gyro + acc corrections\nfrom the balanced labels (multi-horizon)',
                         'training loss')
             if new:
                 axP.set_xlim(0, len(L)); axP.set_ylim(min(L) * 0.9, max(L) * 1.05)
                 axP.set_xlabel('epoch', color=MUTED, fontsize=7)
-                axP._ln, = axP.plot([], [], color=C_LOSS, lw=1.8)
+                axP._ln, = axP.plot([], [], color=C_LOSS, lw=2.2)
             n = max(1, int(q * len(L)))
             axP._ln.set_data(np.arange(n), L[:n])
             row(2, 'training loss', f'{L[0]:.2f} → {L[n - 1]:.2f}', L[n - 1] / L[0], C_LOSS, ghost=1.0)
         else:                                                          # 5. learned IO -> PGO
-            q = min(1.0, (f - N1 - N2 - N3 - N4 + 1) / N5)
+            q = min(1.0, (f - N1 - N2 - N3 - N4 + 1) / (0.85 * N5))
             tc = W + q * (T - W)
             new = stage(4, 'Learned IO → PGO', 'the running PGO switches to the corrected\nIMU, no restart; the map is built',
                         'data flow')
@@ -297,7 +306,7 @@ def main():
                     wd = 0.26 if name == 'KISS-IMU' else 0.2
                     axP.add_patch(FancyBboxPatch((x - wd / 2, y - 0.09), wd, 0.18,
                                                  boxstyle='round,pad=0,rounding_size=0.04', fc=BG, ec=c, lw=1.6))
-                    axP.text(x, y, name, ha='center', va='center', color=c, fontsize=8.5, fontweight='bold')
+                    axP.text(x, y, name, ha='center', va='center', color=c, fontsize=9.5, fontweight='bold')
                 paths = [((0.22, 0.72), (0.35, 0.72), C_SEL), ((0.61, 0.72), (0.86, 0.72), C_LRN),
                          ((0.86, 0.72), (0.86, 0.55), C_LRN), ((0.22, 0.20), (0.86, 0.20), MUTED),
                          ((0.86, 0.20), (0.86, 0.37), MUTED)]
