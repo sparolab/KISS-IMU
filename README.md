@@ -144,9 +144,9 @@ python3 scripts/run_pgo.py configs/diter_os/pgo.yaml --seqs Forest_new --out run
 
 ### Motion-balanced learning
 
-<div align="center"><img src="fig/gmm_balance.gif" alt="motion features of the first 30 s, the GMM motion regimes, the share of training signal per regime before and after reweighting, and the training" width="90%" /></div>
+<div align="center"><img src="fig/gmm_balance.gif" alt="a sliding window turning the IMU stream of the first 30 s into motion features, the GMM motion regimes, the share of training signal per regime before and after reweighting, and the training" width="90%" /></div>
 
-What the learning sees in the first 30 s: motion features (|gravity-free acc|, |gyr|) → GMM regimes (K by BIC) → share of the training signal per regime, raw (dashed) vs. reweighted → training.
+What the learning sees in the first 30 s (IMU only, GT-free): a 0.2 s window slides over the IMU stream and its mean rate |mean ω| and mean gravity-free specific force |mean (R_yaw a − g)| become one point of the motion feature plane → GMM regimes (K by BIC), on the plane and along time → share of the training signal per regime, raw (dashed) vs. effective-number reweighted → training.
 
 ```bash
 python3 tools/make_gmm_gif.py configs/diter_os/warmstart.yaml Forest_new runs/warmstart/Forest_new --out fig/gmm_balance.gif
