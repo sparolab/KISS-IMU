@@ -17,7 +17,7 @@
   <a href="#bookmark_tabs-two-versions"><img src="https://img.shields.io/badge/main-online%20KISS--IMU-3fb8af?logo=github" /></a>
   <a href="https://github.com/sparolab/KISS-IMU/tree/icra2026"><img src="https://img.shields.io/badge/icra2026-paper%20code-6c757d?logo=github" /></a>
   <br />
-  <img src="fig/kiss_imu_online.gif" alt="Online KISS-IMU on DiTer_os Forest_new in six steps: the IMU windows of the first 30 s become motion points, a GMM groups them into motion regimes, the regimes are reweighted so rare motion counts, they train the denoiser, the running PGO switches to the denoised IMU and builds the map, and gyro-only dead reckoning shows raw vs denoised drift" width="95%" />
+  <img src="fig/kiss_imu_online.gif" alt="Online KISS-IMU on DiTer_os Forest_new in seven steps: the IMU windows of the first 30 s become motion points, a GMM groups them into motion regimes, the regimes are reweighted so rare motion counts, they train the denoiser, the running PGO switches to the denoised IMU and builds the map, gyro-only dead reckoning shows raw vs denoised drift, and the path shows where the PGO leans on LiDAR vs the IMU" width="95%" />
   <p>
     <strong>[ICRA 2026] KISS-IMU: Self-supervised Inertial Odometry<br />
     with Motion-balanced Learning and Uncertainty-aware Inference</strong>
@@ -144,9 +144,9 @@ python3 scripts/run_pgo.py configs/diter_os/pgo.yaml --seqs Forest_new --out run
 
 ### Motion-balanced learning
 
-<div align="center"><img src="fig/gmm_balance.gif" alt="a sliding window turning the IMU stream of the first 30 s into motion features, the GMM motion regimes, the share of training signal per regime before and after reweighting, and the training" width="90%" /></div>
+<div align="center"><img src="fig/gmm_balance.gif" alt="the first 30 s cut into 0.2 s IMU windows that become motion points, grouped by a GMM into motion regimes, stacked per regime, reweighted so rare motion grows, and sampled into training batches" width="90%" /></div>
 
-What the learning sees in the first 30 s (IMU only, GT-free): a 0.2 s window slides over the IMU stream and its mean rate |mean ω| and mean gravity-free specific force |mean (R_yaw a − g)| become one point of the motion feature plane → GMM regimes (K by BIC), on the plane and along time → share of the training signal per regime, raw (dashed) vs. effective-number reweighted → training.
+What the learning sees in the first 30 s (IMU only, GT-free): the run cut into 0.2 s windows → one motion point per window (how much it moves, how much it turns) → GMM regimes, also along time → the windows stacked per regime (calm motion dominates) → effective-number weights per regime (rare motion grows) → what a training batch sees, uniform vs motion-balanced.
 
 ```bash
 python3 tools/make_gmm_gif.py configs/diter_os/warmstart.yaml Forest_new runs/warmstart/Forest_new --out fig/gmm_balance.gif
