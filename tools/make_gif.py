@@ -1,19 +1,21 @@
-"""Pipeline animation of one online KISS-IMU run: a block diagram on top (IMU, LiDAR, the network, the PGO, the
-30 s label buffer) whose data flow follows the run, and the map being built below.
+"""Compact animation of one online KISS-IMU run: the map being built on the left, the step on the right, and
+running numbers below the step.
 
-    1. Data selection  - the IMU goes straight to the PGO (raw); LiDAR odometry poses of the first warmup_s
-                         seconds fill the label buffer (coloured by GMM motion regime once training starts)
-    2. Training        - the buffer flows into the network; the regime shares morph to the balanced ones
-    3. Learned IO      - the IMU flows through the network into the PGO; the map is built to the end
+    1. Data selection    - the first warmup_s seconds on the raw IMU; their LiDAR odometry poses are the labels
+    2. Motion regimes    - a GMM over the sliding-window motion features of those seconds
+    3. Reweighting       - per-regime share of the training signal, raw -> motion-balanced
+    4. Training          - the denoiser's training loss
+    5. Learned IO -> PGO - the IMU flows through the network into the running PGO; the map is built to the end
 
 Best with a run whose hand-over is at warmup_s (a released checkpoint replayed without training):
 
     python3 scripts/run_warmstart.py configs/diter_os/warmstart.yaml --seqs Forest_new --out runs/ws_pre \
         --set warmstart.adapt=false warmstart.pretrained=checkpoints/diter_os/Forest_new/kiss_imu_ws30.pt
     python3 tools/make_gif.py configs/diter_os/warmstart.yaml Forest_new runs/ws_pre/Forest_new \
-        --train checkpoints/diter_os/Forest_new --out fig/kiss_imu_online.gif
+        --train checkpoints/diter_os/Forest_new --raw runs/raw/Forest_new --out fig/kiss_imu_online.gif
 """
 import argparse
+import glob
 import json
 import os
 import sys
@@ -24,19 +26,19 @@ import matplotlib  # noqa: E402
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt  # noqa: E402
 import numpy as np  # noqa: E402
+from matplotlib import font_manager  # noqa: E402
 from matplotlib.animation import FuncAnimation, PillowWriter  # noqa: E402
 from matplotlib.colors import to_rgba  # noqa: E402
-from matplotlib.patches import FancyBboxPatch, Rectangle  # noqa: E402
+from matplotlib.patches import Ellipse, FancyBboxPatch  # noqa: E402
 from scipy.spatial.transform import Rotation  # noqa: E402
 
 from kiss_imu.config import load_config  # noqa: E402
 from kiss_imu.data import Sequence  # noqa: E402
 from kiss_imu.training.reweight import MotionGMM, features_fn  # noqa: E402
 
-BG, FG, MUTED, DIM, BOX = '#0d1117', '#e6edf3', '#8b949e', '#3a414b', '#161b22'
-C_IMU, C_LID, C_SEL, C_NET = '#e0607e', '#4a90d9', '#f2a33a', '#3fb8af'
-C_MAP_SEL, C_MAP = '#8a6a3a', '#5b6878'
-PAL = ['#3fb8af', '#f2a33a', '#e0607e', '#8f7ce8', '#6cc24a', '#4a90d9']
+BG, FG, MUTED, LIGHT, MAPC = '#ffffff', '#1f2328', '#59636e', '#d0d7de', '#aab3bd'
+C_RAW, C_LRN, C_SEL, C_LOSS = '#3F51B5', '#00897B', '#D81B60', '#F57C00'
+PAL = ['#3F51B5', '#00897B', '#F57C00', '#D81B60', '#8f7ce8', '#6cc24a']
 
 
 def ease(x):
@@ -44,50 +46,27 @@ def ease(x):
     return x * x * (3 - 2 * x)
 
 
-class Path:
-    """A polyline in figure coordinates with dots running along it."""
-
-    def __init__(self, ax, pts, color, n=6, lw=1.6, ls='-'):
-        self.p = np.asarray(pts, float)
-        seg = np.linalg.norm(np.diff(self.p, axis=0), axis=1)
-        self.cum = np.r_[0, np.cumsum(seg)] / seg.sum()
-        self.color, self.n = color, n
-        self.line, = ax.plot(self.p[:, 0], self.p[:, 1], color=color, lw=lw, ls=ls, alpha=0.25, solid_capstyle='round')
-        self.head = ax.annotate('', xy=self.p[-1], xytext=self.p[-1] - 0.001 * (self.p[-1] - self.p[-2]) / max(seg[-1], 1e-9),
-                                arrowprops=dict(arrowstyle='-|>', color=color, lw=0, mutation_scale=12, alpha=0.25))
-        self.dots = ax.scatter(np.zeros(n), np.zeros(n), s=22, color=color, zorder=5, alpha=0)
-
-    def at(self, u):
-        return np.stack([np.interp(u, self.cum, self.p[:, k]) for k in (0, 1)], 1)
-
-    def set(self, f, active, speed=0.03):
-        self.line.set_alpha(0.85 if active else 0.18)
-        self.head.arrow_patch.set_alpha(0.9 if active else 0.18)
-        if active:
-            self.dots.set_offsets(self.at((np.arange(self.n) / self.n + f * speed) % 1.0)); self.dots.set_alpha(1)
-        else:
-            self.dots.set_alpha(0)
-
-
-def box(ax, xy, w, h, label, color, fs=10):
-    b = FancyBboxPatch((xy[0] - w / 2, xy[1] - h / 2), w, h, boxstyle='round,pad=0.004,rounding_size=0.012',
-                       fc=BOX, ec=color, lw=1.6)
-    ax.add_patch(b)
-    t = ax.text(xy[0], xy[1], label, ha='center', va='center', color=FG, fontsize=fs, fontweight='bold')
-    return b, t
+def use_font():
+    for d in ('/usr/share/fonts/opentype/inter', '/usr/share/fonts/host/inter', os.path.expanduser('~/.fonts')):
+        for f in glob.glob(os.path.join(d, 'Inter-*.otf')) + glob.glob(os.path.join(d, 'Inter*.ttf')):
+            font_manager.fontManager.addfont(f)
+    names = {f.name for f in font_manager.fontManager.ttflist}
+    plt.rcParams['font.family'] = 'Inter' if 'Inter' in names else 'DejaVu Sans'
 
 
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('config'); ap.add_argument('seq'); ap.add_argument('run')
     ap.add_argument('--train', help="dir with history.json (default: the run's last train* dir)")
+    ap.add_argument('--raw', help='raw-IMU run dir (result.json) for the ATE line')
     ap.add_argument('--out', default='fig/kiss_imu_online.gif')
-    ap.add_argument('--fps', type=int, default=15)
+    ap.add_argument('--fps', type=int, default=20)
     ap.add_argument('--map-every', type=int, default=3)
-    ap.add_argument('--points', type=int, default=1200)
+    ap.add_argument('--points', type=int, default=900)
     ap.add_argument('--zmax', type=float, default=3.0)
     ap.add_argument('--set', nargs='*', default=[], dest='overrides')
     a = ap.parse_args()
+    use_font()
     cfg = load_config(a.config, a.overrides)
     d, w = cfg['data'], cfg['warmstart']
     tpath = w['train_config'] if os.path.exists(w['train_config']) else os.path.join(os.path.dirname(a.config), w['train_config'])
@@ -98,8 +77,16 @@ def main():
     on = np.loadtxt(os.path.join(a.run, 'online.txt'))
     t, P, Rq = on[:, 0], on[:, 1:4] - on[0, 1:4], Rotation.from_quat(on[:, 4:8])
     t0 = t[0]
-    t_sel = t0 + float(w['warmup_s'])
+    W = float(w['warmup_s'])
+    T = t[-1] - t0
+    res = json.load(open(os.path.join(a.run, 'result.json')))
+    drift = res.get('imu_drift_after_switch', {})
+    att_raw = drift.get('raw', {}).get('att_deg', {}).get('60.0')
+    att_lrn = drift.get('used', {}).get('att_deg', {}).get('60.0')
+    ate_lrn = res['online']['ate_aligned_rmse']
+    ate_raw = json.load(open(os.path.join(a.raw, 'result.json')))['online']['ate_aligned_rmse'] if a.raw else None
 
+    # map points
     k_scan = np.searchsorted(seq.scan_t, t).clip(0, len(seq.scan_t) - 1)
     rng = np.random.default_rng(0)
     mp, mt = [], []
@@ -107,173 +94,240 @@ def main():
         x = seq.scan(k_scan[i])
         x = x[rng.choice(len(x), min(a.points, len(x)), replace=False)]
         x = x[x[:, 2] < a.zmax]
-        mp.append(Rq[i].apply(x) + P[i]); mt.append(np.full(len(x), t[i]))
+        mp.append(Rq[i].apply(x) + P[i]); mt.append(np.full(len(x), t[i] - t0))
     mp, mt = np.concatenate(mp), np.concatenate(mt)
+    tt = t - t0
 
-    m = (seq.imu_t >= t0) & (seq.imu_t <= t_sel)
+    # motion features + GMM of the warm-up (as the trainer)
+    m = (seq.imu_t >= t0) & (seq.imu_t <= t0 + W)
     F = features_fn(rw)(seq.imu_t, seq.gyr, seq.acc, rw.get('win_s', 0.2))[m]
+    ti = seq.imu_t[m] - t0
     gm = MotionGMM(rw.get('n_components'), tuple(rw.get('k_range', (2, 5))), rw.get('win_s', 0.2),
-                   rw.get('method', 'effective'), rw.get('beta', 0.999), tuple(rw.get('clamp', (0.1, 10.0))), seed=0).fit([F])
+                   rw.get('method', 'effective'), rw.get('beta', 0.999), tuple(rw.get('clamp', (0.1, 10.0))),
+                   seed=rw.get('seed', 0)).fit([F])
+    Pr = gm.proba(F)
     mu = gm.scaler.inverse_transform(gm.gmm.means_)
     order = np.argsort(mu[:, 1] + 0.05 * mu[:, 0])
     rank = np.empty_like(order); rank[order] = np.arange(gm.K)
-    counts = np.bincount(rank[gm.proba(F).argmax(1)], minlength=gm.K).astype(float)
-    cw = np.clip(gm.component_weights(counts), *gm.clamp)
+    comp = rank[Pr.argmax(1)]
+    counts = Pr.sum(0)[order]
+    cw = np.clip(gm.component_weights(Pr.sum(0)), *gm.clamp)[order]
     s_raw, s_bal = counts / counts.sum(), counts * cw / (counts * cw).sum()
+    rare = int(np.argmin(s_raw))
     tdir = a.train
     if tdir is None:
         tdirs = sorted(x for x in os.listdir(a.run) if x.startswith('train'))
         tdir = os.path.join(a.run, tdirs[-1]) if tdirs else None
     hp = os.path.join(tdir, 'history.json') if tdir else ''
-    L = np.array([h['train_loss'] for h in json.load(open(hp))]) if os.path.exists(hp) else np.zeros(0)
+    L = np.array([h['train_loss'] for h in json.load(open(hp))]) if os.path.exists(hp) else np.ones(2)
 
-    # ---- figure: diagram on top, map below
-    fig = plt.figure(figsize=(12, 7.2), dpi=85)
+    # ---- figure
+    fig = plt.figure(figsize=(9.6, 4.8), dpi=100)
     fig.patch.set_facecolor(BG)
-    axD = fig.add_axes([0, 0, 1, 1]); axD.set_xlim(0, 1); axD.set_ylim(0, 1); axD.axis('off'); axD.set_zorder(2)
-    axD.patch.set_alpha(0)
-    axM = fig.add_axes([0.02, 0.02, 0.96, 0.55]); axM.set_facecolor(BG); axM.axis('off'); axM.set_zorder(1)
-    lo, hi = np.percentile(mp[:, :2], 0.5, axis=0), np.percentile(mp[:, :2], 99.5, axis=0)
-    axM.set_xlim(lo[0], hi[0]); axM.set_ylim(lo[1], hi[1]); axM.set_aspect('equal')
-    sc = axM.scatter(np.zeros(0), np.zeros(0), s=0.25, linewidths=0)
-    ln_sel, = axM.plot([], [], color=C_SEL, lw=2.4, solid_capstyle='round')
-    ln_lrn, = axM.plot([], [], color=C_NET, lw=2.4, solid_capstyle='round')
-    dot, = axM.plot([], [], 'o', color=FG, ms=6, mec=BG, mew=1.5)
+    axO = fig.add_axes([0, 0, 1, 1]); axO.set_xlim(0, 1); axO.set_ylim(0, 1); axO.axis('off'); axO.set_zorder(3)
+    axO.patch.set_alpha(0)
+    axM = fig.add_axes([0.01, 0.10, 0.60, 0.78]); axM.axis('off')
+    lo, hi = P[:, :2].min(0) - 12.0, P[:, :2].max(0) + 12.0          # the whole trajectory + a margin
+    r = (0.60 * 9.6) / (0.78 * 4.8)                                    # axes width / height in inches
+    c, span = (lo + hi) / 2, hi - lo
+    sx = max(span[0], span[1] * r)
+    axM.set_xlim(c[0] - sx / 2, c[0] + sx / 2); axM.set_ylim(c[1] - sx / r / 2, c[1] + sx / r / 2)
+    sc = axM.scatter(np.zeros(0), np.zeros(0), s=0.15, color=MAPC, linewidths=0, alpha=0.55)
+    ln_sel, = axM.plot([], [], color=C_SEL, lw=2.6, solid_capstyle='round', zorder=4)
+    ln_lrn, = axM.plot([], [], color=C_LRN, lw=2.0, solid_capstyle='round', zorder=3)
+    head = axM.scatter([], [], s=40, color=FG, zorder=5, edgecolors=BG, linewidths=1.2)
+    # legend
+    for k, (c, s) in enumerate([(C_SEL, 'first 30 s, raw IMU (training data)'), (C_LRN, 'learned IO in the PGO')]):
+        x0 = 0.02 + k * 0.32
+        axO.scatter([x0], [0.955], s=40, color=c)
+        axO.text(x0 + 0.012, 0.955, s, color=c, fontsize=8.5, va='center', fontweight='bold')
+    clock = axO.text(0.02, 0.905, '', color=MUTED, fontsize=8.5, va='center')
+    axO.plot([0.625, 0.625], [0.03, 0.97], color=LIGHT, lw=0.8)
 
-    # blocks
-    IMU, LID, NET, PGO, BUF = (0.08, 0.875), (0.08, 0.66), (0.38, 0.84), (0.66, 0.84), (0.38, 0.665)
-    box(axD, IMU, 0.10, 0.07, 'IMU', C_IMU)
-    box(axD, LID, 0.10, 0.07, 'LiDAR', C_LID)
-    b_pgo, _ = box(axD, PGO, 0.12, 0.10, 'PGO', FG, fs=12)
-    axD.text(PGO[0], PGO[1] - 0.075, 'sliding window → map ↓', ha='center', color=MUTED, fontsize=8)
-    # network: rounded box with a small layered net inside
-    b_net = FancyBboxPatch((NET[0] - 0.09, NET[1] - 0.085), 0.18, 0.17, boxstyle='round,pad=0.004,rounding_size=0.015',
-                           fc=BOX, ec=C_NET, lw=2)
-    axD.add_patch(b_net)
-    axD.text(NET[0], NET[1] + 0.098, 'KISS-IMU network', ha='center', color=FG, fontsize=10, fontweight='bold')
-    layers = [3, 5, 5, 3]
-    xs = np.linspace(NET[0] - 0.065, NET[0] + 0.065, len(layers))
-    nodes = [np.stack([np.full(n, x), NET[1] + np.linspace(-0.055, 0.055, n) * (n / 5)], 1) for x, n in zip(xs, layers)]
-    edges = []
-    for A, B in zip(nodes[:-1], nodes[1:]):
-        for p in A:
-            for q in B:
-                edges.append(axD.plot([p[0], q[0]], [p[1], q[1]], color=C_NET, lw=0.6, alpha=0.15)[0])
-    node_sc = axD.scatter(np.concatenate(nodes)[:, 0], np.concatenate(nodes)[:, 1], s=38, color=DIM, zorder=4,
-                          edgecolors=C_NET, linewidths=0.8)
-    loss_txt = axD.text(NET[0], NET[1] - 0.105, '', ha='center', color=MUTED, fontsize=8.5)
-    # label buffer: frame + stacked bar of GMM regime shares
-    bw, bh = 0.18, 0.045
-    axD.add_patch(FancyBboxPatch((BUF[0] - bw / 2, BUF[1] - bh / 2), bw, bh, boxstyle='round,pad=0.003,rounding_size=0.008',
-                                 fc=BOX, ec=C_SEL, lw=1.6))
-    buf_lbl = axD.text(BUF[0], BUF[1] - 0.045, '', ha='center', color=MUTED, fontsize=8.5)
-    axD.text(BUF[0] - bw / 2 - 0.01, BUF[1], '30 s\nlabels', ha='right', va='center', color=C_SEL, fontsize=8.5, fontweight='bold')
-    segs = [Rectangle((BUF[0], BUF[1] - bh / 2 + 0.006), 0, bh - 0.012, fc=PAL[k % len(PAL)], lw=0) for k in range(gm.K)]
-    fill = Rectangle((BUF[0] - bw / 2 + 0.005, BUF[1] - bh / 2 + 0.006), 0, bh - 0.012, fc=MUTED, alpha=0.6, lw=0)
-    for r in segs + [fill]:
-        axD.add_patch(r)
+    # sidebar
+    X0 = 0.655
+    BW = 0.315
+    title = axO.text(X0, 0.935, '', color=FG, fontsize=13, fontweight='bold', va='center')
+    subt = axO.text(X0, 0.87, '', color=MUTED, fontsize=8.2, va='center', linespacing=1.4)
+    plab = axO.text(X0, 0.805, '', color=MUTED, fontsize=8, va='center')
+    axP = fig.add_axes([X0 + 0.03, 0.50, BW - 0.03, 0.275]); axP.set_zorder(2)
 
-    paths = {
-        'imu_raw': Path(axD, [(0.13, 0.875), (0.20, 0.875), (0.20, 0.965), (0.64, 0.965), (0.64, 0.89)], C_IMU, n=7, ls=(0, (3, 2))),
-        'imu_net': Path(axD, [(0.13, 0.86), (0.29, 0.86)], C_IMU, n=4),
-        'net_pgo': Path(axD, [(0.47, 0.84), (0.60, 0.84)], C_NET, n=4),
-        'lidar': Path(axD, [(0.13, 0.62), (0.69, 0.62), (0.69, 0.79)], C_LID, n=8),
-        'pgo_buf': Path(axD, [(0.64, 0.79), (0.64, 0.665), (0.47, 0.665)], C_SEL, n=5),
-        'buf_net': Path(axD, [(0.38, 0.688), (0.38, 0.755)], C_SEL, n=3),
-    }
-    axD.text(0.42, 0.975, 'raw IMU', color=C_IMU, fontsize=8, ha='center', va='bottom')
-    axD.text(0.535, 0.852, 'learned IO', color=C_NET, fontsize=8.5, ha='center', va='bottom', fontweight='bold')
-    axD.text(0.555, 0.672, 'LO poses', color=C_SEL, fontsize=8, ha='center', va='bottom')
+    def clear_panel():
+        axP.clear(); axP.set_facecolor(BG); axP.axis('on')
+        for s in axP.spines.values():
+            s.set_color(LIGHT)
+        axP.tick_params(colors=MUTED, labelsize=6.5, length=2)
 
-    steps = [axD.text(0.78, 0.93 - 0.075 * k, s, color=DIM, fontsize=12.5, fontweight='bold')
-             for k, s in enumerate(['①  Data selection', '②  Training', '③  Learned IO → PGO'])]
-    cap = axD.text(0.78, 0.66, '', color=MUTED, fontsize=9, va='top', linespacing=1.4)
-    clock = axD.text(0.78, 0.705, '', color=FG, fontsize=10.5, family='monospace')
+    # running numbers (bars)
+    rows = []
+    for k in range(4):
+        y = 0.375 - k * 0.088
+        lab = axO.text(X0, y, '', color=FG, fontsize=7.6, va='bottom')
+        val = axO.text(X0 + BW, y, '', color=FG, fontsize=7.6, va='bottom', ha='right')
+        ghost = FancyBboxPatch((X0, y - 0.028), 0, 0.017, boxstyle='square,pad=0', fc=LIGHT, ec='none')
+        bar = FancyBboxPatch((X0, y - 0.028), 0, 0.017, boxstyle='square,pad=0', fc=LIGHT, ec='none')
+        axO.add_patch(ghost); axO.add_patch(bar)
+        rows.append((lab, val, ghost, bar))
 
-    col_sel, col_map = np.array(to_rgba(C_MAP_SEL)), np.array(to_rgba(C_MAP))
-    mcol = np.where((mt < t_sel)[:, None], col_sel, col_map)
+    def row(k, label, value, frac, color, ghost=None):
+        lab, val, g, b = rows[k]
+        lab.set_text(label); val.set_text(value)
+        b.set_width(BW * float(np.clip(frac, 0, 1))); b.set_facecolor(color)
+        g.set_width(BW * float(np.clip(ghost, 0, 1)) if ghost is not None else 0)
 
-    def show_map(tc):
+    pill = FancyBboxPatch((0.015, 0.03), 0.59, 0.06, boxstyle='round,pad=0,rounding_size=0.012', fc='#fce4ec',
+                          ec='none', alpha=0)
+    axO.add_patch(pill)
+    pill_t = axO.text(0.03, 0.06, '', color=C_SEL, fontsize=9.5, fontweight='bold', va='center')
+
+    N1, N2, N3, N4, N5, HOLD = 50, 32, 32, 32, 100, 30
+    total = N1 + N2 + N3 + N4 + N5 + HOLD
+    i_sel = np.searchsorted(tt, W)
+    rng2 = np.random.default_rng(1)
+    sub = np.sort(rng2.choice(len(F), min(1500, len(F)), replace=False))
+    Fs, cs = F[sub], comp[sub]
+    xmax, ymax = np.percentile(F[:, 0], 99.5) * 1.1, np.percentile(F[:, 1], 99.5) * 1.1
+    gnorm = np.linalg.norm(seq.gyr[m], axis=1)
+    dec = max(1, len(ti) // 600)
+    state = {'stage': -1}
+    rare_lab = f'rarest motion regime M{rare + 1}: share of the signal'
+
+    def draw_map(tc):
         k = mt <= tc
-        sc.set_offsets(mp[k, :2]); sc.set_color(mcol[k])
-        n = int(np.searchsorted(t, tc, side='right'))
-        s = t[:n] < t_sel
-        ln_sel.set_data(P[:n][s, 0], P[:n][s, 1]); ln_lrn.set_data(P[:n][~s, 0], P[:n][~s, 1])
-        dot.set_data([P[max(n - 1, 0), 0]], [P[max(n - 1, 0), 1]])
+        sc.set_offsets(mp[k, :2])
+        j = int(np.searchsorted(tt, tc))
+        js = min(j, i_sel)
+        ln_sel.set_data(P[:js + 1, 0], P[:js + 1, 1])
+        if j > i_sel:
+            ln_lrn.set_data(P[i_sel:j + 1, 0], P[i_sel:j + 1, 1])
+        head.set_offsets([P[min(j, len(P) - 1), :2]])
+        clock.set_text(f'{a.seq}   t = {tc:5.1f} s / {T:.0f} s')
 
-    def set_buffer(level, shares):
-        x0, W = BUF[0] - bw / 2 + 0.005, (bw - 0.01)
-        if shares is None:
-            fill.set_width(W * level)
-            for r in segs:
-                r.set_width(0)
-        else:
-            fill.set_width(0)
-            x = x0
-            for r, s in zip(segs, shares):
-                r.set_x(x); r.set_width(W * s); x += W * s
-
-    def net_glow(f, on):
-        if on:
-            ph = np.concatenate([np.full(n, i) for i, n in enumerate(layers)])
-            b = 0.5 + 0.5 * np.sin(0.6 * f - 1.2 * ph)
-            c = np.array(to_rgba(C_NET)); dim = np.array(to_rgba(DIM))
-            node_sc.set_color(dim[None] * (1 - b[:, None]) + c[None] * b[:, None])
-            for e in edges:
-                e.set_alpha(0.35)
-        else:
-            node_sc.set_color(DIM)
-            for e in edges:
-                e.set_alpha(0.12)
-
-    def set_step(k):
-        for i, s in enumerate(steps):
-            s.set_color(FG if i == k else DIM)
-
-    N1, N2, N3, HOLD = 50, 70, 120, 15
+    def stage(sidx, ttl, st, pl):
+        title.set_text(ttl); subt.set_text(st); plab.set_text(pl)
+        if state['stage'] != sidx:
+            state['stage'] = sidx
+            clear_panel()
+            return True
+        return False
 
     def frame(f):
-        if f < N1:
+        if f >= N1:
+            row(0, 'training data', f'first {W:.0f} s of {T:.0f} s', W / T, C_SEL)
+        if f >= N1 + N2 + N3:
+            row(1, rare_lab, f'{100 * s_raw[rare]:.0f} % → {100 * s_bal[rare]:.0f} %', s_bal[rare],
+                PAL[rare % len(PAL)], ghost=s_raw[rare])
+        if f >= N1 + N2 + N3 + N4:
+            row(2, 'training loss', f'{L[0]:.2f} → {L[-1]:.2f}', L[-1] / L[0], C_LOSS, ghost=1.0)
+
+        if f < N1:                                                     # 1. data selection
             q = (f + 1) / N1
-            tc = t0 + q * (t_sel - t0)
-            set_step(0); show_map(tc); net_glow(f, False)
-            for k, p in paths.items():
-                p.set(f, k in ('imu_raw', 'lidar', 'pgo_buf'))
-            set_buffer(q, None)
-            buf_lbl.set_text(f'collecting  {tc - t0:4.1f} / {t_sel - t0:.0f} s')
-            loss_txt.set_text('waiting for data')
-            cap.set_text('the robot runs on the raw IMU;\nLiDAR odometry poses of the\nfirst 30 s become pseudo-labels')
-            clock.set_text(f't = {tc - t0:5.1f} s')
-        elif f < N1 + N2:
-            g = f - N1
-            set_step(1); show_map(t_sel); net_glow(f, True)
-            for k, p in paths.items():
-                p.set(f, k == 'buf_net', speed=0.05)
-            q = ease((g - 15) / 30)
-            set_buffer(1, (1 - q) * s_raw + q * s_bal)
-            buf_lbl.set_text('GMM motion regimes: raw share' if q < 0.05 else 'motion-balanced share')
-            if len(L):
-                e = int(ease(g / (N2 - 5)) * (len(L) - 1))
-                loss_txt.set_text(f'training  epoch {e + 1:2d}/{len(L)}   loss {L[e]:.2f}')
-            cap.set_text('the network learns from the 30 s\nonly (no GT); rare motion regimes\nare up-weighted (GMM balancing)')
-            clock.set_text(f't = {t_sel - t0:5.1f} s')
-        else:
-            g = min(f - N1 - N2, N3 - 1)
-            tc = t_sel + ease((g + 1) / N3) * (t[-1] - t_sel)
-            set_step(2); show_map(tc); net_glow(f, True)
-            for k, p in paths.items():
-                p.set(f, k in ('imu_net', 'net_pgo', 'lidar'))
-            set_buffer(1, s_bal)
-            buf_lbl.set_text('motion-balanced share')
-            loss_txt.set_text('corrected IMU, causal')
-            cap.set_text('every IMU sample now passes the\nnetwork; the running PGO uses\nthe learned IO and builds the map')
-            clock.set_text(f't = {tc - t0:5.1f} s')
+            tc = q * W
+            new = stage(0, 'Data selection', 'the first 30 s run on the raw IMU;\nLiDAR odometry poses become the labels',
+                        '|ω| of the IMU stream  [rad/s]')
+            if new:
+                axP.set_xlim(0, W); axP.set_ylim(0, np.percentile(gnorm, 99.5) * 1.1)
+                axP._ln, = axP.plot([], [], color=C_SEL, lw=0.8)
+                axP.set_xlabel('t [s]', color=MUTED, fontsize=7)
+            k = ti[::dec] <= tc
+            axP._ln.set_data(ti[::dec][k], gnorm[::dec][k])
+            draw_map(tc)
+            row(0, 'training data', f'{tc:4.1f} s of {T:.0f} s', tc / T, C_SEL)
+        elif f < N1 + N2:                                              # 2. motion regimes
+            q = ease((f - N1 + 1) / N2)
+            new = stage(1, 'Motion regimes', 'a 0.2 s window turns the IMU into motion\nfeatures; a GMM splits them (K by BIC)',
+                        f'motion features, K = {gm.K} regimes')
+            if new:
+                axP.set_xlim(0, xmax); axP.set_ylim(0, ymax)
+                axP.set_xlabel('|mean gravity-free acc|', color=MUTED, fontsize=7)
+                axP.set_ylabel('|mean ω|', color=MUTED, fontsize=7)
+                axP._sc = axP.scatter(Fs[:, 0], Fs[:, 1], s=2.5, linewidths=0, color=MAPC)
+                axP._el = []
+                for kk in range(gm.K):
+                    j = order[kk]
+                    C = gm.scaler.scale_[:, None] * gm.gmm.covariances_[j] * gm.scaler.scale_[None]
+                    ev, V = np.linalg.eigh(C)
+                    e = Ellipse(mu[j], 4 * np.sqrt(ev[1]), 4 * np.sqrt(ev[0]),
+                                angle=np.degrees(np.arctan2(V[1, 1], V[0, 1])), fill=False, lw=1.4,
+                                color=PAL[kk % len(PAL)], alpha=0)
+                    axP.add_patch(e); axP._el.append(e)
+            base = np.array(to_rgba(MAPC))
+            cols = np.array([to_rgba(PAL[c % len(PAL)]) for c in cs])
+            axP._sc.set_color((1 - q) * base + q * cols)
+            for e in axP._el:
+                e.set_alpha(q)
+            row(1, rare_lab, f'{100 * s_raw[rare]:.0f} %', q * s_raw[rare], PAL[rare % len(PAL)])
+        elif f < N1 + N2 + N3:                                         # 3. reweighting
+            q = ease((f - N1 - N2 + 1 - 6) / (N3 - 12))
+            new = stage(2, 'Motion-balanced reweighting', 'effective-number weights per regime:\nrare motion is not drowned out',
+                        'share of the training signal per regime')
+            x = np.arange(gm.K)
+            if new:
+                axP._b = axP.bar(x, s_raw, color=[PAL[k % len(PAL)] for k in range(gm.K)], width=0.6)
+                axP.bar(x, s_raw, color='none', edgecolor=MUTED, lw=0.9, ls='--', width=0.6)
+                axP.set_xticks(x); axP.set_xticklabels([f'M{k + 1}' for k in range(gm.K)])
+                axP.set_ylim(0, max(s_raw.max(), s_bal.max()) * 1.25)
+                axP._t = [axP.text(k, 0, '', ha='center', va='bottom', color=FG, fontsize=7) for k in range(gm.K)]
+            sh = (1 - q) * s_raw + q * s_bal
+            for b, s, tx in zip(axP._b, sh, axP._t):
+                b.set_height(s); tx.set_y(s); tx.set_text(f'{100 * s:.0f}%')
+            row(1, rare_lab, f'{100 * s_raw[rare]:.0f} % → {100 * sh[rare]:.0f} %', sh[rare], PAL[rare % len(PAL)],
+                ghost=s_raw[rare])
+        elif f < N1 + N2 + N3 + N4:                                    # 4. training
+            q = ease((f - N1 - N2 - N3 + 1) / N4)
+            new = stage(3, 'Training', 'the denoiser learns gyro + acc corrections\nfrom the balanced labels (multi-horizon)',
+                        'training loss')
+            if new:
+                axP.set_xlim(0, len(L)); axP.set_ylim(min(L) * 0.9, max(L) * 1.05)
+                axP.set_xlabel('epoch', color=MUTED, fontsize=7)
+                axP._ln, = axP.plot([], [], color=C_LOSS, lw=1.8)
+            n = max(1, int(q * len(L)))
+            axP._ln.set_data(np.arange(n), L[:n])
+            row(2, 'training loss', f'{L[0]:.2f} → {L[n - 1]:.2f}', L[n - 1] / L[0], C_LOSS, ghost=1.0)
+        else:                                                          # 5. learned IO -> PGO
+            q = min(1.0, (f - N1 - N2 - N3 - N4 + 1) / N5)
+            tc = W + q * (T - W)
+            new = stage(4, 'Learned IO → PGO', 'the running PGO switches to the corrected\nIMU, no restart; the map is built',
+                        'data flow')
+            if new:
+                axP.set_xlim(0, 1); axP.set_ylim(0, 1); axP.axis('off')
+                bx = {'IMU': (0.12, 0.72, C_SEL), 'KISS-IMU': (0.48, 0.72, C_LRN), 'PGO': (0.86, 0.46, C_RAW),
+                      'LiDAR': (0.12, 0.20, MUTED)}
+                for name, (x, y, c) in bx.items():
+                    wd = 0.26 if name == 'KISS-IMU' else 0.2
+                    axP.add_patch(FancyBboxPatch((x - wd / 2, y - 0.09), wd, 0.18,
+                                                 boxstyle='round,pad=0,rounding_size=0.04', fc=BG, ec=c, lw=1.6))
+                    axP.text(x, y, name, ha='center', va='center', color=c, fontsize=8.5, fontweight='bold')
+                paths = [((0.22, 0.72), (0.35, 0.72), C_SEL), ((0.61, 0.72), (0.86, 0.72), C_LRN),
+                         ((0.86, 0.72), (0.86, 0.55), C_LRN), ((0.22, 0.20), (0.86, 0.20), MUTED),
+                         ((0.86, 0.20), (0.86, 0.37), MUTED)]
+                axP._paths = []
+                for p0, p1, c in paths:
+                    axP.plot([p0[0], p1[0]], [p0[1], p1[1]], color=c, lw=1.2, alpha=0.35)
+                    axP._paths.append((np.array(p0), np.array(p1), axP.scatter([], [], s=14, color=c, zorder=5)))
+                axP.text(0.74, 0.78, 'learned IO', color=C_LRN, fontsize=7, ha='center')
+                axP.text(0.29, 0.78, 'raw', color=C_SEL, fontsize=7, ha='center')
+                axP.text(0.50, 0.25, 'scans', color=MUTED, fontsize=7, ha='center')
+            u = (np.arange(3) / 3 + f * 0.04) % 1.0
+            for p0, p1, s in axP._paths:
+                s.set_offsets(p0[None] + u[:, None] * (p1 - p0)[None])
+            draw_map(tc)
+            if att_raw is not None:
+                e = ease(q * 3)
+                row(3, 'IMU-only attitude drift over 60 s', f'{att_raw:.0f}° → {att_lrn:.0f}°',
+                    e * att_lrn / att_raw + (1 - e), C_LRN, ghost=1.0)
+            k0 = N1 + N2 + N3 + N4 + N5 - 25
+            if f >= k0:
+                al = min(1, (f - k0) / 10)
+                pill.set_alpha(al); pill_t.set_alpha(al)
+                pill_t.set_text(f'trained on {W:.0f} s of its own run · no GT' +
+                                (f' · ATE {ate_raw:.3f} → {ate_lrn:.3f} m' if ate_raw is not None else ''))
         return []
 
-    anim = FuncAnimation(fig, frame, frames=N1 + N2 + N3 + HOLD, blit=False)
+    anim = FuncAnimation(fig, frame, frames=total, blit=False)
     os.makedirs(os.path.dirname(os.path.abspath(a.out)), exist_ok=True)
     anim.save(a.out, writer=PillowWriter(fps=a.fps), savefig_kwargs={'facecolor': BG})
-    print('saved', a.out)
+    print('saved', a.out, 'K', gm.K, 'rare', rare, s_raw.round(3), s_bal.round(3), att_raw, att_lrn, ate_raw, ate_lrn)
 
 
 if __name__ == '__main__':

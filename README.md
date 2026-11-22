@@ -38,7 +38,7 @@ ______________________________________________________________________
 An IMU drifts, but a robot with a LiDAR already carries its own teacher. KISS-IMU lets the robot learn its IMU denoiser from **the first 30 s of the run it is on**, and then keeps running on it:
 
 - :dart: **Data selection**: the first 30 s run on the raw IMU; the LiDAR odometry poses of that stretch are the pseudo-labels. No GT, no training set.
-- :scales: **Motion-balanced learning**: a GMM over motion features splits the stretch into motion regimes; effective-number weights, a frequency gate, a rare-regime boost and per-regime convergence keep rare motion from being drowned out.
+- :balance_scale: **Motion-balanced learning**: a GMM over motion features splits the stretch into motion regimes; effective-number weights, a frequency gate, a rare-regime boost and per-regime convergence keep rare motion from being drowned out.
 - :jigsaw: **Overlap-score labels**: the stretch is re-run with the corrected IMU and every scan pair's label is re-picked among {label, re-run LO, re-run PGO} by point-cloud overlap; the model is retrained.
 - :chart_with_downwards_trend: **Multi-horizon loss**: preintegration residuals over 0.5–10 s, each pair weighted by a GT-free label-vs-IMU noise fit.
 - :repeat: **Learned IO in the loop**: the *running* sliding-window LiDAR-inertial PGO switches to the corrected IMU, no restart.
@@ -151,7 +151,7 @@ What the learning sees in the first 30 s (IMU only, GT-free): a 0.2 s window sli
 ```bash
 python3 tools/make_gmm_gif.py configs/diter_os/warmstart.yaml Forest_new runs/warmstart/Forest_new --out fig/gmm_balance.gif
 python3 tools/make_gif.py configs/diter_os/warmstart.yaml Forest_new runs/ws_pretrained/Forest_new \
-    --train checkpoints/diter_os/Forest_new --out fig/kiss_imu_online.gif
+    --train checkpoints/diter_os/Forest_new --raw runs/raw/Forest_new --out fig/kiss_imu_online.gif
 ```
 
 ### Live view
