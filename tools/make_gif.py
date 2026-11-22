@@ -88,7 +88,7 @@ def main():
     ap.add_argument('--raw', help='raw-IMU run dir (result.json) for the ATE line')
     ap.add_argument('--out', default='fig/kiss_imu_online.gif')
     ap.add_argument('--fps', type=int, default=15)
-    ap.add_argument('--dr-starts', type=float, nargs='+', default=[120.0, 200.0, 300.0])
+    ap.add_argument('--dr-starts', type=float, nargs='+', help='default: the three spots of step 5')
     ap.add_argument('--dr-horizon', type=float, default=60.0)
     ap.add_argument('--map-every', type=int, default=3)
     ap.add_argument('--points', type=int, default=900)
@@ -204,6 +204,15 @@ def main():
     share_l = 1.0 / (1.0 + 10 ** (-(trust - np.median(trust))))           # LiDAR share vs the run's typical mix
     trust = (trust - np.median(trust)) / max(1e-6, (hi95 - lo5) / 2)
     print(f'trust: LiDAR/IMU weight ratio spread x{spread:.1f} (5-95 %)')
+    # three spots to zoom into: where the PGO leans most on LiDAR, most on the IMU, and a typical one
+    cand = np.where((tr_t > W + 15) & (tr_t < T - a.dr_horizon - 5))[0]
+    i_hi, i_lo = cand[np.argmax(share_l[cand])], cand[np.argmin(share_l[cand])]
+    far = cand[(np.abs(tr_t[cand] - tr_t[i_hi]) > 40) & (np.abs(tr_t[cand] - tr_t[i_lo]) > 40)]
+    i_md = far[np.argmin(np.abs(share_l[far] - 0.5))] if len(far) else cand[len(cand) // 2]
+    spots = sorted([int(i_hi), int(i_lo), int(i_md)], key=lambda i: tr_t[i])
+    if not a.dr_starts:
+        a.dr_starts = [float(tr_t[i]) for i in spots]
+    print('spots', [(round(float(tr_t[i])), round(float(share_l[i]), 2)) for i in spots])
     sm = np.loadtxt(os.path.join(a.run, 'smoothed.txt'))
     ref = (sm[:, 0], sm[:, 1:4] - origin, Slerp(sm[:, 0], Rotation.from_quat(sm[:, 4:8])))
     DR = []
@@ -341,46 +350,64 @@ def main():
         dials.append((cx, wd, ar, val))
     axG.text(1.1, 0.9, 'IMU-only attitude drift over 60 s (RMSE)', color=MUTED, fontsize=8.5, ha='center')
 
-    # step 5: path coloured by how the PGO weighs LiDAR vs IMU, and a donut of the current mix
+    # step 5 spots: zoom into the map, the local pose graph (nodes 1 s apart; LiDAR factor on one side, IMU
+    # factor on the other, width = its share of the weight) and the share as numbers
     C_LID, C_IMU = '#3F51B5', '#F57C00'
+    ZW = 15.0
 
-    def trust_rgba(v):
-        v = np.clip(v, -1, 1)[:, None]
-        mid = np.array(to_rgba('#c9ced6'))
-        return np.where(v > 0, (1 - v) * mid + v * np.array(to_rgba(C_LID)), (1 + v) * mid - v * np.array(to_rgba(C_IMU)))
+    def zoom_lim(cxy):
+        h = np.array([ZW / 2, ZW / 2 / r])
+        return fit(cxy - h, cxy + h)
 
-    tr_col = trust_rgba(trust)
-    i_tr = int(np.searchsorted(tr_t, W))
-    tr_lc = LineCollection([], linewidths=3.0, capstyle='butt', zorder=6)
-    axM.add_collection(tr_lc)
-    # sliding-window pose graph (step 5): nodes = scan poses, LiDAR factor arcs above, IMU factor arcs below,
-    # arc width = that factor's share of the weight (relative to this run's typical mix)
-    GN = 9
-    GX = np.linspace(0.625, 0.95, GN)
-    GY = 0.125
-    gr_title = axO.text(0.59, 0.265, '', color=FG, fontsize=8.5, fontweight='bold', va='center')
-    gr_now = axO.text(0.97, 0.265, '', color=MUTED, fontsize=8, va='center', ha='right')
-    gr_ll = axO.text(0.59, GY + 0.06, 'LiDAR', color=C_LID, fontsize=7.5, fontweight='bold', va='center', alpha=0)
-    gr_li = axO.text(0.59, GY - 0.06, 'IMU', color=C_IMU, fontsize=7.5, fontweight='bold', va='center', alpha=0)
-    uu = np.linspace(0, 1, 14)
+    loc_lc = LineCollection([], capstyle='round', zorder=8)
+    axM.add_collection(loc_lc)
+    loc_nodes = axM.scatter(np.zeros(0), np.zeros(0), s=70, color=BG, edgecolors=FG, linewidths=1.4, zorder=9)
+    badges = [axM.text(tr_xy[i, 0], tr_xy[i, 1] + 4.0, f'LiDAR {100 * share_l[i]:.0f}%', color=C_LID, fontsize=7.5,
+                       fontweight='bold', ha='center', va='bottom', alpha=0, zorder=11,
+                       clip_on=True, bbox=dict(boxstyle='round,pad=0.25', fc=BG, ec=C_LID, lw=0.8, alpha=0)) for i in spots]
+    sp_title = axO.text(0.59, 0.255, '', color=FG, fontsize=9, fontweight='bold', va='center', alpha=0)
+    sp_l = axO.text(0.59, 0.19, '', color=C_LID, fontsize=16, fontweight='bold', va='center', alpha=0)
+    sp_i = axO.text(0.97, 0.19, '', color=C_IMU, fontsize=16, fontweight='bold', va='center', ha='right', alpha=0)
+    sp_bl = Rectangle((0.59, 0.115), 0, 0.03, color=C_LID, alpha=0)
+    sp_bi = Rectangle((0.59, 0.115), 0, 0.03, color=C_IMU, alpha=0)
+    axO.add_patch(sp_bl); axO.add_patch(sp_bi)
+    sp_c = axO.text(0.59, 0.07, "PGO weighting here, relative to this run's typical LiDAR : IMU mix", color=MUTED,
+                    fontsize=7.6, va='center', alpha=0)
+    leg_l = axO.text(0.02, 0.955, '— LiDAR factor', color=C_LID, fontsize=9, fontweight='bold', va='center', alpha=0)
+    leg_i = axO.text(0.14, 0.955, '— IMU factor    (width = weight)', color=C_IMU, fontsize=9, fontweight='bold',
+                     va='center', alpha=0)
 
-    def arc(x0, x1, up):
-        return np.stack([x0 + (x1 - x0) * uu, GY + (1 if up else -1) * 0.075 * np.sin(np.pi * uu)], 1)
+    def local_graph(i0, g):
+        tn = tr_t[i0] + np.arange(-4, 5) * 1.0
+        k = np.searchsorted(tr_t, tn).clip(0, len(tr_t) - 1)
+        xy = tr_xy[k]
+        d = np.gradient(xy, axis=0); d /= np.maximum(np.linalg.norm(d, axis=1, keepdims=True), 1e-6)
+        nrm = np.stack([-d[:, 1], d[:, 0]], 1) * 0.45
+        ne = max(0, int(g * (len(xy) - 1)))
+        segs, lw, col = [], [], []
+        for e in range(ne):
+            sh = float(share_l[(k[e] + k[e + 1]) // 2])
+            segs.append([xy[e] + nrm[e], xy[e + 1] + nrm[e + 1]]); lw.append(1.0 + 12.0 * sh); col.append(to_rgba(C_LID, 0.9))
+            segs.append([xy[e] - nrm[e], xy[e + 1] - nrm[e + 1]]); lw.append(1.0 + 12.0 * (1 - sh)); col.append(to_rgba(C_IMU, 0.9))
+        loc_lc.set_segments(segs); loc_lc.set_linewidths(lw if lw else [1]); loc_lc.set_color(col if col else [to_rgba(BG, 0)])
+        loc_nodes.set_offsets(xy[:ne + 1] if g > 0 else np.zeros((0, 2)))
 
-    gr_arcs = LineCollection([arc(GX[k], GX[k + 1], u) for u in (True, False) for k in range(GN - 1)],
-                             colors=[to_rgba(C_LID, 0)] * (GN - 1) + [to_rgba(C_IMU, 0)] * (GN - 1), capstyle='round', zorder=6)
-    axO.add_collection(gr_arcs)
-    gr_nodes = axO.scatter(GX, np.full(GN, GY), s=90, color=BG, edgecolors=FG, linewidths=1.6, zorder=7, alpha=0)
-    gr_new = axO.scatter([GX[-1]], [GY], s=90, color=FG, zorder=8, alpha=0)
-    leg_l = axO.text(0.02, 0.955, '■ more LiDAR than usual', color=C_LID, fontsize=9, fontweight='bold', va='center', alpha=0)
-    leg_i = axO.text(0.22, 0.955, '■ more IMU than usual', color=C_IMU, fontsize=9, fontweight='bold', va='center', alpha=0)
+    def spot_card(al, k=None):
+        for x in (sp_title, sp_l, sp_i, sp_bl, sp_bi, sp_c):
+            x.set_alpha(al)
+        if k is not None:
+            i = spots[k]; sh = float(share_l[i])
+            sp_title.set_text(f'spot {k + 1} / {len(spots)}   t = {tr_t[i]:.0f} s')
+            sp_l.set_text(f'LiDAR {100 * sh:.0f}%'); sp_i.set_text(f'IMU {100 * (1 - sh):.0f}%')
+            sp_bl.set_width(0.38 * sh); sp_bi.set_x(0.59 + 0.38 * sh); sp_bi.set_width(0.38 * (1 - sh))
 
     pill = FancyBboxPatch((0.015, 0.025), 0.53, 0.055, boxstyle='round,pad=0,rounding_size=0.012', fc='#e0f2f1',
                           ec='none', alpha=0, zorder=9)
     axO.add_patch(pill)
     pill_t = axO.text(0.03, 0.0525, '', color=C_LRN, fontsize=9, fontweight='bold', va='center', zorder=10)
 
-    NA, NB, NC, ND, NE, NF, HOLD = 85, 55, 60, 65, 120, 95, 40
+    NBLD, NSP = 95, 40                                                    # step 5: build, then each spot
+    NA, NB, NC, ND, NE, NF, HOLD = 85, 55, 60, 65, NBLD + 3 * NSP, 95, 40
     S = np.cumsum([0, NA, NB, NC, ND, NE, NF])
     total = int(S[-1] + HOLD)
     FLY = 14
@@ -520,37 +547,35 @@ def main():
         elif f < S[5]:                                                     # 5. run with the learned IO
             fl = f - S[4]
             q1 = ease((fl + 1) / 12)
-            q = min(1.0, (fl + 1) / (0.85 * NE))
             text(5, 'Run', 'the PGO switches to the denoised IMU, no restart;\nLiDAR weighed by its GICP Hessian, IMU by its own noise')
             bub.set_alpha(1 - q1)
-            io_in.set_alpha(q1); io_out.set_alpha(q1); io_out.get_bbox_patch().set_alpha(q1)
-            show_net(1.0)
-            net_wave(f)
-            if fl < NE - 6:
-                spawn(np.array([[0.65, 0.52]]), nodes[0][prng.integers(0, layers[0], 1)], np.array([to_rgba(C_RAW)]), 9)
-                spawn(nodes[-1][prng.integers(0, layers[-1], 1)], np.array([[0.955, 0.52]]), np.array([to_rgba(C_LRN)]), 9)
-            step_particles()
             loss_ln.set_data([], [])
-            set_lim((1 - ease(fl / 18)) * LIM_WARM + ease(fl / 18) * LIM_FULL)
-            tc = W + q * (T - W)
-            map_to(tc, path_reg)
-            ln_lrn.set_visible(False)
-            n = int(np.searchsorted(tr_t, tc))
-            if n > i_tr + 1:
-                tr_lc.set_segments(np.stack([tr_xy[i_tr:n - 1], tr_xy[i_tr + 1:n]], 1)); tr_lc.set_color(tr_col[i_tr:n - 1])
-            leg.set_text(''); leg_l.set_alpha(q1); leg_i.set_alpha(q1)
             big.set_text(''); bigl.set_text('')
-            # pose graph window: one node per frame step, the newest on the right
-            idx = np.clip(n - (GN - 1 - np.arange(GN)) * max(1, int((len(tr_t) - i_tr) / (0.85 * NE))), 0, len(share_l) - 1)
-            tn = np.clip(trust[idx[1:]], -1, 1)                               # spread-normalised
-            w_l, w_i = 3.6 + 3.3 * tn, 3.6 - 3.3 * tn
-            gr_arcs.set_linewidths(np.r_[w_l, w_i])
-            al_l, al_i = 0.35 + 0.65 * (tn + 1) / 2, 0.35 + 0.65 * (1 - tn) / 2
-            gr_arcs.set_color([to_rgba(C_LID, q1 * v) for v in al_l] + [to_rgba(C_IMU, q1 * v) for v in al_i])
-            gr_nodes.set_alpha(q1); gr_new.set_alpha(q1); gr_ll.set_alpha(q1); gr_li.set_alpha(q1)
-            gr_title.set_text('sliding-window pose graph'); gr_title.set_alpha(q1)
-            sl_ = float(share_l[min(n, len(share_l) - 1)])
-            gr_now.set_text(f'newest edge: LiDAR {100 * sl_:.0f}% · IMU {100 * (1 - sl_):.0f}%'); gr_now.set_alpha(q1)
+            if fl < NBLD:
+                q = min(1.0, (fl + 1) / (0.9 * NBLD))
+                io_in.set_alpha(q1); io_out.set_alpha(q1); io_out.get_bbox_patch().set_alpha(q1)
+                show_net(1.0); net_wave(f)
+                if fl < NBLD - 6:
+                    spawn(np.array([[0.65, 0.52]]), nodes[0][prng.integers(0, layers[0], 1)], np.array([to_rgba(C_RAW)]), 9)
+                    spawn(nodes[-1][prng.integers(0, layers[-1], 1)], np.array([[0.955, 0.52]]), np.array([to_rgba(C_LRN)]), 9)
+                step_particles()
+                set_lim((1 - ease(fl / 18)) * LIM_WARM + ease(fl / 18) * LIM_FULL)
+                tc = W + q * (T - W)
+                map_to(tc, path_reg)
+                leg.set_text('— learned IO in the PGO'); leg.set_color(C_LRN)
+            else:
+                k, u = divmod(fl - NBLD, NSP)
+                i = spots[k]
+                map_to(T, path_reg); head.set_alpha(0)
+                show_net(0.25); net_wave(f, 0.25); step_particles()
+                z = ease(u / 9) * (1 - ease((u - (NSP - 7)) / 7))
+                set_lim((1 - z) * LIM_FULL + z * zoom_lim(tr_xy[i]))
+                local_graph(i, ease((u - 7) / 16) if u < NSP - 7 else 0.0)
+                spot_card(float(ease(u / 6)) if k == 0 else 1.0, k)
+                leg.set_text(''); leg_l.set_alpha(z); leg_i.set_alpha(z)
+                clock.set_text(f'{a.seq}    t = {tr_t[i]:5.1f} s')
+                if u > NSP - 10:
+                    badges[k].set_alpha(1); badges[k].get_bbox_patch().set_alpha(1)
         else:                                                              # 6. denoised
             fl = f - S[5]
             q1 = ease((fl + 1) / 12)
@@ -563,10 +588,8 @@ def main():
             if q1 >= 1:
                 show_net(0)
             axG.set_visible(True)
-            tr_lc.set_alpha(1 - 0.75 * q1); leg_l.set_alpha(1 - q1); leg_i.set_alpha(1 - q1)
-            for x in (gr_nodes, gr_new, gr_ll, gr_li, gr_title, gr_now):
-                x.set_alpha(1 - q1)
-            gr_arcs.set_color([to_rgba(C_LID, 1 - q1)] * (GN - 1) + [to_rgba(C_IMU, 1 - q1)] * (GN - 1))
+            leg_l.set_alpha(0); leg_i.set_alpha(0); spot_card(1 - q1); local_graph(spots[0], 0.0)
+            ln_lrn.set_color((1 - q1) * np.array(to_rgba(C_LRN)) + q1 * np.array(to_rgba('#c5ccd3')))
             seg_sel.set_alpha(1 - 0.7 * q1); head.set_alpha(1 - q1)
             leg.set_text('— reference (LiDAR)    - - raw IMU    — KISS-IMU'); leg.set_color(FG)
             clock.set_text(f'{a.seq}    dead reckoning  {q * a.dr_horizon:4.1f} s / {a.dr_horizon:.0f} s')
