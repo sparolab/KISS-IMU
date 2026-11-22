@@ -353,15 +353,25 @@ def main():
     i_tr = int(np.searchsorted(tr_t, W))
     tr_lc = LineCollection([], linewidths=3.0, capstyle='butt', zorder=6)
     axM.add_collection(tr_lc)
-    axD = fig.add_axes([0.585, 0.025, 0.15, 0.215]); axD.set_xlim(-1.1, 1.1); axD.set_ylim(-1.1, 1.1)
-    axD.set_aspect('equal'); axD.axis('off'); axD.set_visible(False)
-    don_l = Wedge((0, 0), 1.0, 90, 90, width=0.34, color=C_LID)
-    don_i = Wedge((0, 0), 1.0, 90, 90, width=0.34, color=C_IMU)
-    axD.add_patch(don_l); axD.add_patch(don_i)
-    axD.text(0, 0, 'PGO', color=FG, fontsize=9, fontweight='bold', ha='center', va='center')
-    don_tl = axO.text(0.75, 0.175, '', color=C_LID, fontsize=13, fontweight='bold', va='center', alpha=0)
-    don_ti = axO.text(0.75, 0.115, '', color=C_IMU, fontsize=13, fontweight='bold', va='center', alpha=0)
-    don_c = axO.text(0.75, 0.055, '', color=MUTED, fontsize=7.8, va='center', alpha=0, linespacing=1.3)
+    # sliding-window pose graph (step 5): nodes = scan poses, LiDAR factor arcs above, IMU factor arcs below,
+    # arc width = that factor's share of the weight (relative to this run's typical mix)
+    GN = 9
+    GX = np.linspace(0.625, 0.95, GN)
+    GY = 0.125
+    gr_title = axO.text(0.59, 0.265, '', color=FG, fontsize=8.5, fontweight='bold', va='center')
+    gr_now = axO.text(0.97, 0.265, '', color=MUTED, fontsize=8, va='center', ha='right')
+    gr_ll = axO.text(0.59, GY + 0.06, 'LiDAR', color=C_LID, fontsize=7.5, fontweight='bold', va='center', alpha=0)
+    gr_li = axO.text(0.59, GY - 0.06, 'IMU', color=C_IMU, fontsize=7.5, fontweight='bold', va='center', alpha=0)
+    uu = np.linspace(0, 1, 14)
+
+    def arc(x0, x1, up):
+        return np.stack([x0 + (x1 - x0) * uu, GY + (1 if up else -1) * 0.075 * np.sin(np.pi * uu)], 1)
+
+    gr_arcs = LineCollection([arc(GX[k], GX[k + 1], u) for u in (True, False) for k in range(GN - 1)],
+                             colors=[to_rgba(C_LID, 0)] * (GN - 1) + [to_rgba(C_IMU, 0)] * (GN - 1), capstyle='round', zorder=6)
+    axO.add_collection(gr_arcs)
+    gr_nodes = axO.scatter(GX, np.full(GN, GY), s=90, color=BG, edgecolors=FG, linewidths=1.6, zorder=7, alpha=0)
+    gr_new = axO.scatter([GX[-1]], [GY], s=90, color=FG, zorder=8, alpha=0)
     leg_l = axO.text(0.02, 0.955, '■ more LiDAR than usual', color=C_LID, fontsize=9, fontweight='bold', va='center', alpha=0)
     leg_i = axO.text(0.22, 0.955, '■ more IMU than usual', color=C_IMU, fontsize=9, fontweight='bold', va='center', alpha=0)
 
@@ -530,14 +540,17 @@ def main():
                 tr_lc.set_segments(np.stack([tr_xy[i_tr:n - 1], tr_xy[i_tr + 1:n]], 1)); tr_lc.set_color(tr_col[i_tr:n - 1])
             leg.set_text(''); leg_l.set_alpha(q1); leg_i.set_alpha(q1)
             big.set_text(''); bigl.set_text('')
-            axD.set_visible(True)
+            # pose graph window: one node per frame step, the newest on the right
+            idx = np.clip(n - (GN - 1 - np.arange(GN)) * max(1, int((len(tr_t) - i_tr) / (0.85 * NE))), 0, len(share_l) - 1)
+            tn = np.clip(trust[idx[1:]], -1, 1)                               # spread-normalised
+            w_l, w_i = 3.6 + 3.3 * tn, 3.6 - 3.3 * tn
+            gr_arcs.set_linewidths(np.r_[w_l, w_i])
+            al_l, al_i = 0.35 + 0.65 * (tn + 1) / 2, 0.35 + 0.65 * (1 - tn) / 2
+            gr_arcs.set_color([to_rgba(C_LID, q1 * v) for v in al_l] + [to_rgba(C_IMU, q1 * v) for v in al_i])
+            gr_nodes.set_alpha(q1); gr_new.set_alpha(q1); gr_ll.set_alpha(q1); gr_li.set_alpha(q1)
+            gr_title.set_text('sliding-window pose graph'); gr_title.set_alpha(q1)
             sl_ = float(share_l[min(n, len(share_l) - 1)])
-            don_l.set_theta1(90 - 360 * sl_ * q1); don_l.set_theta2(90)
-            don_i.set_theta1(90 - 360 * q1); don_i.set_theta2(90 - 360 * sl_ * q1)
-            for x in (don_tl, don_ti, don_c):
-                x.set_alpha(q1)
-            don_tl.set_text(f'LiDAR  {100 * sl_:.0f}%'); don_ti.set_text(f'IMU  {100 * (1 - sl_):.0f}%')
-            don_c.set_text("PGO weighting now, relative to\nthis run's typical LiDAR : IMU mix")
+            gr_now.set_text(f'newest edge: LiDAR {100 * sl_:.0f}% · IMU {100 * (1 - sl_):.0f}%'); gr_now.set_alpha(q1)
         else:                                                              # 6. denoised
             fl = f - S[5]
             q1 = ease((fl + 1) / 12)
@@ -551,9 +564,9 @@ def main():
                 show_net(0)
             axG.set_visible(True)
             tr_lc.set_alpha(1 - 0.75 * q1); leg_l.set_alpha(1 - q1); leg_i.set_alpha(1 - q1)
-            axD.set_visible(q1 < 1)
-            for x in (don_l, don_i, don_tl, don_ti, don_c):
+            for x in (gr_nodes, gr_new, gr_ll, gr_li, gr_title, gr_now):
                 x.set_alpha(1 - q1)
+            gr_arcs.set_color([to_rgba(C_LID, 1 - q1)] * (GN - 1) + [to_rgba(C_IMU, 1 - q1)] * (GN - 1))
             seg_sel.set_alpha(1 - 0.7 * q1); head.set_alpha(1 - q1)
             leg.set_text('— reference (LiDAR)    - - raw IMU    — KISS-IMU'); leg.set_color(FG)
             clock.set_text(f'{a.seq}    dead reckoning  {q * a.dr_horizon:4.1f} s / {a.dr_horizon:.0f} s')
