@@ -17,7 +17,7 @@
   <a href="#bookmark_tabs-two-versions"><img src="https://img.shields.io/badge/main-online%20KISS--IMU-3fb8af?logo=github" /></a>
   <a href="https://github.com/sparolab/KISS-IMU/tree/icra2026"><img src="https://img.shields.io/badge/icra2026-paper%20code-6c757d?logo=github" /></a>
   <br />
-  <img src="fig/kiss_imu_online.gif" alt="Online KISS-IMU on DiTer_os Forest_new in seven steps: the IMU windows of the first 30 s become motion points, a GMM groups them into motion regimes, the regimes are reweighted so rare motion counts, they train the denoiser, the running PGO switches to the denoised IMU and builds the map, gyro-only dead reckoning shows raw vs denoised drift, and the path shows where the PGO leans on LiDAR vs the IMU" width="95%" />
+  <img src="fig/kiss_imu_online.gif" alt="Online KISS-IMU on DiTer_os Forest_new in six steps: the IMU windows of the first 30 s become motion points, a GMM groups them into motion regimes, the regimes are reweighted so rare motion counts, they train the denoiser, the running PGO switches to the denoised IMU and builds the map with the path coloured by where the PGO leans on LiDAR vs the IMU, and gyro-only dead reckoning shows raw vs denoised drift" width="95%" />
   <p>
     <strong>[ICRA 2026] KISS-IMU: Self-supervised Inertial Odometry<br />
     with Motion-balanced Learning and Uncertainty-aware Inference</strong>

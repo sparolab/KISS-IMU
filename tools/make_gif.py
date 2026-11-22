@@ -6,10 +6,10 @@
     3. Balance   - each regime becomes a bubble sized by its share of the training signal, then resized by
                    the effective-number weights (rare motion grows)
     4. Learn     - the balanced regimes stream into the denoiser
-    5. Run       - the running PGO takes the denoised IMU (learned IO); the map is built to the end
+    5. Run       - the running PGO takes the denoised IMU (learned IO); the map is built to the end, the path
+                   coloured by where the PGO leans on LiDAR (GICP Hessian) vs the IMU (its sample variance)
     6. Denoised  - gyro-only dead reckoning (60 s, LiDAR speed) from a few points of the run: raw vs denoised,
                    and the IMU-only attitude drift
-    7. Trust     - along the run, where the PGO leans on LiDAR (GICP Hessian) vs the IMU (its sample variance)
 
 Best with a run whose hand-over is at warmup_s (a released checkpoint replayed without training):
 
@@ -201,6 +201,7 @@ def main():
     # than it usually does on this run (relative to the median), scaled to the run's spread
     lo5, hi95 = np.percentile(trust, [5, 95])
     spread = float(10 ** (hi95 - lo5))
+    share_l = 1.0 / (1.0 + 10 ** (-(trust - np.median(trust))))           # LiDAR share vs the run's typical mix
     trust = (trust - np.median(trust)) / max(1e-6, (hi95 - lo5) / 2)
     print(f'trust: LiDAR/IMU weight ratio spread x{spread:.1f} (5-95 %)')
     sm = np.loadtxt(os.path.join(a.run, 'smoothed.txt'))
@@ -340,7 +341,7 @@ def main():
         dials.append((cx, wd, ar, val))
     axG.text(1.1, 0.9, 'IMU-only attitude drift over 60 s (RMSE)', color=MUTED, fontsize=8.5, ha='center')
 
-    # step 7: trust-coloured path, seesaw, strip
+    # step 5: path coloured by how the PGO weighs LiDAR vs IMU, and a donut of the current mix
     C_LID, C_IMU = '#3F51B5', '#F57C00'
 
     def trust_rgba(v):
@@ -349,40 +350,28 @@ def main():
         return np.where(v > 0, (1 - v) * mid + v * np.array(to_rgba(C_LID)), (1 + v) * mid - v * np.array(to_rgba(C_IMU)))
 
     tr_col = trust_rgba(trust)
-    tr_lc = LineCollection([], linewidths=3.4, capstyle='butt', zorder=6)
+    i_tr = int(np.searchsorted(tr_t, W))
+    tr_lc = LineCollection([], linewidths=3.0, capstyle='butt', zorder=6)
     axM.add_collection(tr_lc)
-    SX, SY = 0.775, 0.55
-    beam, = axO.plot([], [], color=FG, lw=3, solid_capstyle='round', zorder=6)
-    pivot = axO.scatter([SX], [SY - 0.035], marker='^', s=420, color=MUTED, zorder=5)
-    pan_l = axO.scatter([], [], marker='s', s=500, color=C_LID, zorder=7)
-    pan_r = axO.scatter([], [], marker='s', s=500, color=C_IMU, zorder=7)
-    lab_l = axO.text(0, 0, 'LiDAR', color=C_LID, fontsize=10, fontweight='bold', ha='center', va='bottom', zorder=8)
-    lab_r = axO.text(0, 0, 'IMU', color=C_IMU, fontsize=10, fontweight='bold', ha='center', va='bottom', zorder=8)
-    axT = fig.add_axes([0.60, 0.25, 0.37, 0.12])
-    axT.set_xlim(0, T); lim_ = float(np.abs(trust).max()); axT.set_ylim(-lim_, lim_)
-    axT.fill_between(tr_t, 0, trust, where=trust > 0, color=C_LID, alpha=0.7, lw=0)
-    axT.fill_between(tr_t, 0, trust, where=trust <= 0, color=C_IMU, alpha=0.7, lw=0)
-    axT.axhline(0, color=MUTED, lw=0.6)
-    for s_ in ('top', 'right', 'left'):
-        axT.spines[s_].set_visible(False)
-    axT.spines['bottom'].set_color(LIGHT); axT.set_yticks([])
-    axT.tick_params(colors=MUTED, labelsize=7, length=2)
-    axT.text(T * 0.01, lim_, 'more LiDAR than usual', color=C_LID, fontsize=7.5, va='top', zorder=5)
-    axT.text(T * 0.01, -lim_, 'more IMU than usual', color=C_IMU, fontsize=7.5, va='bottom', zorder=5)
-    strip_mask = Rectangle((0, -lim_), T, 2 * lim_, color=BG, zorder=3)
-    axT.add_patch(strip_mask)
-    strip_cur = axT.axvline(0, color=FG, lw=1.0, zorder=4)
-    seesaw = [beam, pivot, pan_l, pan_r, lab_l, lab_r, axT]
-    for x in seesaw:
-        x.set_visible(False)
+    axD = fig.add_axes([0.585, 0.025, 0.15, 0.215]); axD.set_xlim(-1.1, 1.1); axD.set_ylim(-1.1, 1.1)
+    axD.set_aspect('equal'); axD.axis('off'); axD.set_visible(False)
+    don_l = Wedge((0, 0), 1.0, 90, 90, width=0.34, color=C_LID)
+    don_i = Wedge((0, 0), 1.0, 90, 90, width=0.34, color=C_IMU)
+    axD.add_patch(don_l); axD.add_patch(don_i)
+    axD.text(0, 0, 'PGO', color=FG, fontsize=9, fontweight='bold', ha='center', va='center')
+    don_tl = axO.text(0.75, 0.175, '', color=C_LID, fontsize=13, fontweight='bold', va='center', alpha=0)
+    don_ti = axO.text(0.75, 0.115, '', color=C_IMU, fontsize=13, fontweight='bold', va='center', alpha=0)
+    don_c = axO.text(0.75, 0.055, '', color=MUTED, fontsize=7.8, va='center', alpha=0, linespacing=1.3)
+    leg_l = axO.text(0.02, 0.955, '■ more LiDAR than usual', color=C_LID, fontsize=9, fontweight='bold', va='center', alpha=0)
+    leg_i = axO.text(0.22, 0.955, '■ more IMU than usual', color=C_IMU, fontsize=9, fontweight='bold', va='center', alpha=0)
 
     pill = FancyBboxPatch((0.015, 0.025), 0.53, 0.055, boxstyle='round,pad=0,rounding_size=0.012', fc='#e0f2f1',
                           ec='none', alpha=0, zorder=9)
     axO.add_patch(pill)
     pill_t = axO.text(0.03, 0.0525, '', color=C_LRN, fontsize=9, fontweight='bold', va='center', zorder=10)
 
-    NA, NB, NC, ND, NE, NF, NG, HOLD = 85, 55, 60, 65, 90, 80, 110, 40
-    S = np.cumsum([0, NA, NB, NC, ND, NE, NF, NG])
+    NA, NB, NC, ND, NE, NF, HOLD = 85, 55, 60, 65, 120, 95, 40
+    S = np.cumsum([0, NA, NB, NC, ND, NE, NF])
     total = int(S[-1] + HOLD)
     FLY = 14
     i_sel = int(np.searchsorted(tt, W))
@@ -412,7 +401,7 @@ def main():
         clock.set_text(f'{a.seq}    t = {tc:5.1f} s / {T:.0f} s')
 
     def text(n, ttl, st):
-        step.set_text(f'STEP {n} / 7'); title.set_text(ttl); subt.set_text(st)
+        step.set_text(f'STEP {n} / 6'); title.set_text(ttl); subt.set_text(st)
 
     def spawn(p0, p1, col, dur):
         prt['p0'] = np.vstack([prt['p0'], p0]); prt['p1'] = np.vstack([prt['p1'], p1])
@@ -522,7 +511,7 @@ def main():
             fl = f - S[4]
             q1 = ease((fl + 1) / 12)
             q = min(1.0, (fl + 1) / (0.85 * NE))
-            text(5, 'Run', 'the running PGO switches to the denoised IMU\n(learned IO), no restart; the map is built')
+            text(5, 'Run', 'the PGO switches to the denoised IMU, no restart;\nLiDAR weighed by its GICP Hessian, IMU by its own noise')
             bub.set_alpha(1 - q1)
             io_in.set_alpha(q1); io_out.set_alpha(q1); io_out.get_bbox_patch().set_alpha(q1)
             show_net(1.0)
@@ -535,9 +524,21 @@ def main():
             set_lim((1 - ease(fl / 18)) * LIM_WARM + ease(fl / 18) * LIM_FULL)
             tc = W + q * (T - W)
             map_to(tc, path_reg)
-            leg.set_text('— learned IO in the PGO'); leg.set_color(C_LRN)
-            big.set_text(f'{tc:.0f} s'); big.set_color(C_LRN); bigl.set_text('on the learned IO, one run, no GT')
-        elif f < S[6]:                                                     # 6. denoised
+            ln_lrn.set_visible(False)
+            n = int(np.searchsorted(tr_t, tc))
+            if n > i_tr + 1:
+                tr_lc.set_segments(np.stack([tr_xy[i_tr:n - 1], tr_xy[i_tr + 1:n]], 1)); tr_lc.set_color(tr_col[i_tr:n - 1])
+            leg.set_text(''); leg_l.set_alpha(q1); leg_i.set_alpha(q1)
+            big.set_text(''); bigl.set_text('')
+            axD.set_visible(True)
+            sl_ = float(share_l[min(n, len(share_l) - 1)])
+            don_l.set_theta1(90 - 360 * sl_ * q1); don_l.set_theta2(90)
+            don_i.set_theta1(90 - 360 * q1); don_i.set_theta2(90 - 360 * sl_ * q1)
+            for x in (don_tl, don_ti, don_c):
+                x.set_alpha(q1)
+            don_tl.set_text(f'LiDAR  {100 * sl_:.0f}%'); don_ti.set_text(f'IMU  {100 * (1 - sl_):.0f}%')
+            don_c.set_text("PGO weighting now, relative to\nthis run's typical LiDAR : IMU mix")
+        else:                                                              # 6. denoised
             fl = f - S[5]
             q1 = ease((fl + 1) / 12)
             q = ease((fl + 1 - 10) / (0.7 * NF))
@@ -549,7 +550,10 @@ def main():
             if q1 >= 1:
                 show_net(0)
             axG.set_visible(True)
-            ln_lrn.set_color((1 - q1) * np.array(to_rgba(C_LRN)) + q1 * np.array(to_rgba('#c5ccd3')))
+            tr_lc.set_alpha(1 - 0.75 * q1); leg_l.set_alpha(1 - q1); leg_i.set_alpha(1 - q1)
+            axD.set_visible(q1 < 1)
+            for x in (don_l, don_i, don_tl, don_ti, don_c):
+                x.set_alpha(1 - q1)
             seg_sel.set_alpha(1 - 0.7 * q1); head.set_alpha(1 - q1)
             leg.set_text('— reference (LiDAR)    - - raw IMU    — KISS-IMU'); leg.set_color(FG)
             clock.set_text(f'{a.seq}    dead reckoning  {q * a.dr_horizon:4.1f} s / {a.dr_horizon:.0f} s')
@@ -564,40 +568,8 @@ def main():
                 ar.set_positions((cx, 0.15), (cx + 0.5 * np.cos(th), 0.15 + 0.5 * np.sin(th)))
                 val.set_text(f'{aq:.0f}°')
             big.set_text(''); bigl.set_text('')
-        else:                                                              # 7. LiDAR vs IMU trust
-            fl = f - S[6]
-            q1 = ease((fl + 1) / 12)
-            q = ease((fl + 1 - 8) / (0.75 * NG))
-            text(7, 'Trust', 'the PGO weighs LiDAR by its GICP Hessian (geometry)\nand the IMU by its own sample variance (vibration)')
-            for (r0, r1, r2, st_), al in zip(dr_art, [1 - q1] * len(dr_art)):
-                for x in (r0, r1, r2, st_):
-                    x.set_alpha(al)
-            axG.set_visible(q1 < 1)
-            for _, wd, ar, val in dials:
-                wd.set_alpha(1 - q1); ar.set_alpha(1 - q1); val.set_alpha(1 - q1)
-            ln_lrn.set_alpha(1 - q1); seg_sel.set_alpha(0.3 * (1 - q1))
-            n = max(2, int(q * len(tr_t)))
-            tr_lc.set_segments(np.stack([tr_xy[:n - 1], tr_xy[1:n]], 1)); tr_lc.set_color(tr_col[:n - 1])
-            head.set_alpha(1); head.set_offsets([tr_xy[n - 1]])
-            leg.set_text(''); clock.set_text(f'{a.seq}    t = {tr_t[n - 1]:5.1f} s / {T:.0f} s')
-            for x in seesaw:
-                x.set_visible(True)
-            r = float(np.clip(trust[n - 1], -1, 1))
-            ang = 16 * r * q1                                                # the heavier side goes down
-            c_, s_ = np.cos(np.radians(ang)), np.sin(np.radians(ang))
-            L_, H_ = 0.13, 0.06
-            beam.set_data([SX - L_ * c_, SX + L_ * c_], [SY - L_ * s_ * (FW / FH), SY + L_ * s_ * (FW / FH)])
-            wl_, wi_ = 1 + max(r, 0) * 1.5, 1 + max(-r, 0) * 1.5
-            pan_l.set_offsets([[SX - L_ * c_, SY - L_ * s_ * (FW / FH) + 0.03]]); pan_l.set_sizes([500 * wl_])
-            pan_r.set_offsets([[SX + L_ * c_, SY + L_ * s_ * (FW / FH) + 0.03]]); pan_r.set_sizes([500 * wi_])
-            lab_l.set_position((SX - L_ * c_, SY - L_ * s_ * (FW / FH) + 0.085))
-            lab_r.set_position((SX + L_ * c_, SY + L_ * s_ * (FW / FH) + 0.085))
-            strip_cur.set_xdata([tr_t[n - 1]] * 2)
-            strip_mask.set_x(tr_t[n - 1]); strip_mask.set_width(T - tr_t[n - 1] + 1)
-            big.set_text(f'× {spread:.1f}'); big.set_color(FG)
-            bigl.set_text('how much the LiDAR : IMU weight ratio changes along the run')
-            if fl > 0.8 * NG:
-                al = min(1, (fl - 0.8 * NG) / 10)
+            if fl > 0.75 * NF:
+                al = min(1, (fl - 0.75 * NF) / 10)
                 pill.set_alpha(al); pill_t.set_alpha(al)
                 pill_t.set_text(f'trained on {W:.0f} s of its own run · no GT' +
                                 (f' · ATE {ate_raw:.3f} → {ate_lrn:.3f} m' if ate_raw is not None else ''))
