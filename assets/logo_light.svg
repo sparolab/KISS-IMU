@@ -1,16 +1,17 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="780" height="150" viewBox="0 0 780 150">
-  <!-- IMU chip -->
-  <rect x="38" y="22" width="108" height="108" rx="18" fill="#eef1fb" stroke="#3F51B5" stroke-width="5"/>
-  <g stroke="#3F51B5" stroke-width="5" stroke-linecap="round">
-    <line x1="60" y1="22" x2="60" y2="10"/><line x1="92" y1="22" x2="92" y2="10"/><line x1="124" y1="22" x2="124" y2="10"/>
-    <line x1="60" y1="130" x2="60" y2="142"/><line x1="92" y1="130" x2="92" y2="142"/><line x1="124" y1="130" x2="124" y2="142"/>
-    <line x1="38" y1="54" x2="26" y2="54"/><line x1="38" y1="98" x2="26" y2="98"/>
-    <line x1="146" y1="54" x2="158" y2="54"/><line x1="146" y1="98" x2="158" y2="98"/>
+<svg xmlns="http://www.w3.org/2000/svg" width="760" height="150" viewBox="0 -8 760 158">
+  <!-- IMU chip: noisy signal in, clean signal out -->
+  <g transform="translate(92,76) scale(0.66) translate(-92,-76)">
+    <rect x="38" y="22" width="108" height="108" rx="18" fill="#eef1fb" stroke="#3F51B5" stroke-width="6"/>
+    <g stroke="#3F51B5" stroke-width="6" stroke-linecap="round">
+      <line x1="60" y1="22" x2="60" y2="10"/><line x1="92" y1="22" x2="92" y2="10"/><line x1="124" y1="22" x2="124" y2="10"/>
+      <line x1="60" y1="130" x2="60" y2="142"/><line x1="92" y1="130" x2="92" y2="142"/><line x1="124" y1="130" x2="124" y2="142"/>
+      <line x1="38" y1="54" x2="26" y2="54"/><line x1="38" y1="98" x2="26" y2="98"/>
+      <line x1="146" y1="54" x2="158" y2="54"/><line x1="146" y1="98" x2="158" y2="98"/>
+    </g>
+    <polyline points="52,88 58,70 63,96 68,64 73,92 78,74 83,84" fill="none" stroke="#D81B60" stroke-width="5" stroke-linejoin="round" stroke-linecap="round"/>
+    <path d="M86 79 C96 58 108 58 118 76 C124 87 128 89 134 80" fill="none" stroke="#00897B" stroke-width="6" stroke-linecap="round"/>
+    <circle cx="86" cy="79" r="5" fill="#3F51B5"/>
   </g>
-  <!-- noisy signal in, clean signal out -->
-  <polyline points="52,88 58,70 63,96 68,64 73,92 78,74 83,84" fill="none" stroke="#D81B60" stroke-width="4" stroke-linejoin="round" stroke-linecap="round" opacity="0.9"/>
-  <path d="M86 79 C96 58 108 58 118 76 C124 87 128 89 134 80" fill="none" stroke="#00897B" stroke-width="5" stroke-linecap="round"/>
-  <circle cx="86" cy="79" r="4.5" fill="#3F51B5"/>
-  <text x="190" y="88" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="72" font-weight="800" letter-spacing="-1" fill="#1f2328"><tspan fill="#00897B">KISS</tspan><tspan fill="#59636e">-</tspan><tspan fill="#D81B60">IMU</tspan></text>
-  <text x="193" y="126" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="21" font-weight="500" fill="#59636e"><tspan fill="#00897B" font-weight="800">K</tspan>eep <tspan fill="#00897B" font-weight="800">I</tspan>MU <tspan fill="#00897B" font-weight="800">S</tspan>table and <tspan fill="#00897B" font-weight="800">S</tspan>trong</text>
+  <text x="170" y="88" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="72" font-weight="800" letter-spacing="-1" fill="#1f2328"><tspan fill="#3F51B5">K</tspan><tspan fill="#D81B60">I</tspan><tspan fill="#00897B">S</tspan><tspan fill="#F57C00">S</tspan>-IMU</text>
+  <text x="173" y="126" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="21" font-weight="500" fill="#59636e"><tspan fill="#3F51B5" font-weight="800">K</tspan>eep <tspan fill="#D81B60" font-weight="800">I</tspan>MU <tspan fill="#00897B" font-weight="800">S</tspan>table and <tspan fill="#F57C00" font-weight="800">S</tspan>trong</text>
 </svg>
