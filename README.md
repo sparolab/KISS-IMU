@@ -15,7 +15,7 @@
   <a href="https://arxiv.org/abs/2603.06205"><img src="https://img.shields.io/badge/arXiv-b33737?logo=arXiv" /></a>
   <a href="https://www.youtube.com/watch?v=cjAFROi-jG0"><img src="https://img.shields.io/badge/YouTube-FF0000?logo=youtube&logoColor=white" /></a>
   <a href="#bookmark_tabs-two-versions"><img src="https://img.shields.io/badge/main-online%20KISS--IMU-3fb8af?logo=github" /></a>
-  <a href="https://github.com/sparolab/KISS-IMU/tree/icra2026"><img src="https://img.shields.io/badge/icra2026-paper%20code-6c757d?logo=github" /></a>
+  <a href="../../tree/icra2026"><img src="https://img.shields.io/badge/icra2026-paper%20code-6c757d?logo=github" /></a>
   <br />
   <img src="fig/kiss_imu_online.gif" alt="Online KISS-IMU on DiTer_os Forest_new in six steps: the IMU windows of the first 30 s become motion points, a GMM groups them into motion regimes, the regimes are reweighted so rare motion counts, they train the denoiser, the running PGO switches to the denoised IMU and builds the map, three spots show how much the PGO weighs LiDAR vs the IMU there, and gyro-only dead reckoning from the same spots shows raw vs denoised drift" width="95%" />
   <p>
@@ -47,8 +47,8 @@ An IMU drifts, but a robot with a LiDAR already carries its own teacher. KISS-IM
 
 | | Branch | Use it to |
 | --- | --- | --- |
-| :new: **Online KISS-IMU** | **`main`** | use KISS-IMU the way the paper argues: **learn from the start of the run → online PGO** |
-| :page_facing_up: **Paper code** | [`icra2026`](https://github.com/sparolab/KISS-IMU/tree/icra2026) · tag [`v1.0-icra2026`](https://github.com/sparolab/KISS-IMU/releases/tag/v1.0-icra2026) | **reproduce the paper**: offline training on training sequences, PVGO inference with learned uncertainty |
+| :new:&nbsp;**Online&nbsp;KISS&#8209;IMU** | **`main`** | use KISS-IMU the way the paper argues: **learn from the start of the run → online PGO** |
+| :page_facing_up:&nbsp;**Paper&nbsp;code** | [`icra2026`](../../tree/icra2026) · tag [`v1.0-icra2026`](../../tree/v1.0-icra2026) | **reproduce the paper**: offline training on training sequences, PVGO inference with learned uncertainty |
 
 ```bash
 git clone https://github.com/sparolab/KISS-IMU.git              # online KISS-IMU
@@ -58,7 +58,7 @@ git clone -b icra2026 https://github.com/sparolab/KISS-IMU.git  # paper code
 <details>
 <summary>What changed from the paper code</summary>
 
-| | Paper code (`icra2026`) | Online KISS-IMU (`main`) |
+| | Paper code (`icra2026`) | Online&nbsp;KISS&#8209;IMU (`main`) |
 | --- | --- | --- |
 | Training data | whole training sequences, offline | first 30 s of the **same** run, online |
 | Pseudo-labels | ICP vs. PGO, overlap vote | LO poses + overlap-score label rounds, in the loop |
