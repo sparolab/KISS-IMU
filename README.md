@@ -11,7 +11,7 @@
   <a href="#package-pretrained-checkpoint"><img src="https://img.shields.io/badge/Checkpoint-Forest__new-f2a33a" /></a>
   <br />
   <a href="https://sparolab.github.io/research/kiss_imu/"><img src="https://img.shields.io/badge/Project-Page-blue" /></a>
-  <a href="https://arxiv.org/abs/2603.06205"><img src="https://img.shields.io/badge/Paper-ICRA%202026-yellow" /></a>
+  <a href="https://ieeexplore.ieee.org/abstract/document/11697039"><img src="https://img.shields.io/badge/Paper-ICRA%202026-yellow" /></a>
   <a href="https://arxiv.org/abs/2603.06205"><img src="https://img.shields.io/badge/arXiv-b33737?logo=arXiv" /></a>
   <a href="https://www.youtube.com/watch?v=cjAFROi-jG0"><img src="https://img.shields.io/badge/YouTube-FF0000?logo=youtube&logoColor=white" /></a>
   <a href="#bookmark_tabs-two-versions"><img src="https://img.shields.io/badge/main-online%20KISS--IMU-3fb8af?logo=github" /></a>
